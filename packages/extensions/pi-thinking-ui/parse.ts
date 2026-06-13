@@ -53,21 +53,6 @@ function ensureCompleteVisibleSummary(summary: string): string {
 	return cleaned ? `${cleaned}.` : `${withoutEllipsis.replace(/[.!?;:,]+$/g, "").trimEnd()}.`;
 }
 
-function firstMeaningfulLine(text: string): string {
-	const lines = normalizeNewlines(text)
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean);
-	return lines[0] ?? "";
-}
-
-function firstSentence(text: string): string {
-	const normalized = collapseWhitespace(text);
-	if (!normalized) return "";
-	const match = normalized.match(/^(.{1,120}?)(?:[.!?](?:\s|$)|$)/);
-	return match?.[1]?.trim() ?? normalized;
-}
-
 function splitListChunk(chunk: string): string[] {
 	const lines = normalizeNewlines(chunk).split("\n");
 	let contentStartIndex = 0;

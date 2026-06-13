@@ -17,20 +17,12 @@ const DEFAULT_HIDDEN_LABEL = "Thinking...";
 const MODE_OPTIONS: ThinkingUIMode[] = ["collapsed", "summary", "expanded"];
 const SCOPE_OPTIONS: PersistedThinkingUIPreferenceScope[] = ["project", "global"];
 
-function modeStatusText(ctx: ExtensionContext, mode: ThinkingUIMode): string {
-	return `${ctx.ui.theme.fg("muted", "thinking:")} ${ctx.ui.theme.fg("accent", mode)}`;
-}
-
 function modeChangeMessage(mode: ThinkingUIMode, scope: ThinkingUICommandScope): string {
 	if (scope === "session") {
 		return `Thinking view: ${mode}`;
 	}
 
 	return `Thinking view: ${mode} (saved for ${scope})`;
-}
-
-function invalidUsageMessage(): string {
-	return "Usage: /thinking-ui [collapsed|summary|expanded] | [project|global] [collapsed|summary|expanded|clear]";
 }
 
 function notifyUser(ctx: ExtensionContext, message: string, level: "info" | "warning"): void {
@@ -45,10 +37,6 @@ function notifyUser(ctx: ExtensionContext, message: string, level: "info" | "war
 	}
 
 	console.info(message);
-}
-
-function persistMode(pi: ExtensionAPI, mode: ThinkingUIMode): void {
-	pi.appendEntry(CUSTOM_ENTRY_TYPE, { mode });
 }
 
 async function readRestoredModePreference(
@@ -82,7 +70,7 @@ function refreshThinkingUI(ctx: ExtensionContext): void {
 	if (!ctx.hasUI) return;
 	setCurrentThinkingScopeKey(ctx.cwd);
 	ctx.ui.setHiddenThinkingLabel(nextThinkingRefreshLabel(DEFAULT_HIDDEN_LABEL, ctx.cwd));
-	ctx.ui.setStatus("thinking-ui", modeStatusText(ctx, getThinkingUIMode(ctx.cwd)));
+	ctx.ui.setStatus("thinking-ui", `${ctx.ui.theme.fg("muted", "thinking:")} ${ctx.ui.theme.fg("accent", getThinkingUIMode(ctx.cwd))}`);
 }
 
 function applyMode(
@@ -94,7 +82,7 @@ function applyMode(
 	setCurrentThinkingScopeKey(ctx.cwd);
 	setThinkingUIMode(mode, ctx.cwd);
 	if (options?.persistSession !== false) {
-		persistMode(pi, mode);
+		pi.appendEntry(CUSTOM_ENTRY_TYPE, { mode });
 	}
 	refreshThinkingUI(ctx);
 	if (options?.announceScope) {
@@ -115,10 +103,6 @@ function parsePreferenceScope(input: string): PersistedThinkingUIPreferenceScope
 	return undefined;
 }
 
-function isClearCommand(input: string): boolean {
-	return ["clear", "reset"].includes(input.trim().toLowerCase());
-}
-
 function parseCommandAction(args: string): ThinkingUICommandAction | undefined {
 	const trimmed = args.trim();
 	if (!trimmed) {
@@ -136,7 +120,7 @@ function parseCommandAction(args: string): ThinkingUICommandAction | undefined {
 		return { type: "set", scope };
 	}
 
-	if (isClearCommand(tail)) {
+	if (["clear", "reset"].includes(tail.trim().toLowerCase())) {
 		return { type: "clear", scope };
 	}
 
@@ -220,7 +204,7 @@ export default function thinkingUIExtension(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			const action = parseCommandAction(args);
 			if (!action) {
-				notifyUser(ctx, invalidUsageMessage(), "warning");
+				notifyUser(ctx, "Usage: /thinking-ui [collapsed|summary|expanded] | [project|global] [collapsed|summary|expanded|clear]", "warning");
 				return;
 			}
 

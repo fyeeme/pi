@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
 import { Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import type { MarkdownTheme } from "@earendil-works/pi-tui";
 import { decrementPatchRefCount, getPatchCleanup, getPatchInstallPromise, incrementPatchRefCount, resolveThinkingMessageScope, setPatchCleanup, setPatchInstallPromise } from "./state.ts";
 import { ThinkingUIComponent } from "./render.ts";
 import type { ThinkingSourceBlock, ThinkingThemeLike } from "./types.ts";
@@ -21,7 +22,7 @@ interface AssistantMessageComponentPrototype {
 	};
 	lastMessage?: AssistantMessage;
 	hideThinkingBlock: boolean;
-	markdownTheme: unknown;
+	markdownTheme: MarkdownTheme;
 	hiddenThinkingLabel: string;
 }
 
@@ -293,7 +294,7 @@ async function installPatch(): Promise<() => void> {
 
 			for (const content of message.content) {
 				if (content.type === "text" && content.text.trim()) {
-					this.contentContainer.addChild(new Markdown(content.text.trim(), 1, 0, this.markdownTheme as any));
+					this.contentContainer.addChild(new Markdown(content.text.trim(), 1, 0, this.markdownTheme));
 					continue;
 				}
 

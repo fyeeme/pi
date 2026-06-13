@@ -21,7 +21,6 @@ interface ThinkingUIGlobalState {
 	messageScopeByObject: WeakMap<object, string>;
 	messageObjectsByScope: Record<string, Set<object>>;
 	messageScopeByTimestamp: Record<string, string>;
-	patchReleases: PatchRelease[];
 	patchReleasesByScope: Record<string, PatchRelease[]>;
 	patchRefCount: number;
 	patchCleanup?: PatchCleanup | undefined;
@@ -39,7 +38,6 @@ interface LegacyThinkingUIGlobalState {
 	messageScopeByObject?: unknown;
 	messageObjectsByScope?: unknown;
 	messageScopeByTimestamp?: unknown;
-	patchReleases?: unknown;
 	patchReleasesByScope?: unknown;
 	patchRefCount?: unknown;
 	patchCleanup?: unknown;
@@ -126,9 +124,6 @@ function ensureGlobalStateShape(state: ThinkingUIGlobalState & LegacyThinkingUIG
 	const legacyPatchReleasesByScope: Record<string, PatchRelease[]> = isRecord(state.patchReleasesByScope)
 		? Object.fromEntries(Object.entries(state.patchReleasesByScope).map(([scopeKey, releases]) => [normalizeThinkingScopeKey(scopeKey), Array.isArray(releases) ? releases as PatchRelease[] : []]))
 		: {};
-	const patchReleases: PatchRelease[] = Array.isArray(state.patchReleases)
-		? state.patchReleases as PatchRelease[]
-		: Object.values(legacyPatchReleasesByScope).flat();
 	const patchReleasesByScope: Record<string, PatchRelease[]> = { ...legacyPatchReleasesByScope };
 
 	for (const scopeKey of Object.keys(modeByScopeKey)) {
@@ -156,7 +151,6 @@ function ensureGlobalStateShape(state: ThinkingUIGlobalState & LegacyThinkingUIG
 	state.messageScopeByObject = messageScopeByObject;
 	state.messageObjectsByScope = messageObjectsByScope;
 	state.messageScopeByTimestamp = messageScopeByTimestamp;
-	state.patchReleases = patchReleases;
 	state.patchReleasesByScope = patchReleasesByScope;
 	state.patchRefCount = typeof state.patchRefCount === "number" && Number.isFinite(state.patchRefCount)
 		? state.patchRefCount
@@ -180,7 +174,6 @@ const globalState = (() => {
 		messageScopeByObject: new WeakMap<object, string>(),
 		messageObjectsByScope: { [DEFAULT_SCOPE_KEY]: new Set<object>() },
 		messageScopeByTimestamp: {},
-		patchReleases: [],
 		patchReleasesByScope: {},
 		patchRefCount: 0,
 	};
