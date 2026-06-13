@@ -1,0 +1,630 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sanitize, renderHtml, extractMermaidBlocks, labelBlocks } from "../index.ts";
+import type { DiagramData, MermaidBlock } from "../index.ts";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function textContentBlock(text: string) {
+	return { type: "text" as const, text };
+}
+
+function imageContentBlock() {
+	return { type: "image" as const, source: { data: "abc", media_type: "image/png" } };
+}
+
+function assistantMessage(content: Array<{ type: string; text?: string }>) {
+	return {
+		role: "assistant" as const,
+		content,
+		timestamp: new Date().toISOString(),
+	};
+}
+
+function userMessage(text: string) {
+	return {
+		role: "user" as const,
+		content: [textContentBlock(text)],
+		timestamp: new Date().toISOString(),
+	};
+}
+
+function messageEntry(message: { role: string; content: unknown; timestamp: string }) {
+	return {
+		type: "message" as const,
+		id: `msg-${Math.random().toString(36).slice(2)}`,
+		parentId: null,
+		timestamp: message.timestamp,
+		message,
+	};
+}
+
+function customEntry(customType: string, data?: unknown) {
+	return {
+		type: "custom" as const,
+		id: `custom-${Math.random().toString(36).slice(2)}`,
+		parentId: null,
+		timestamp: new Date().toISOString(),
+		customType,
+		data,
+	};
+}
+
+/** Build a minimal mock ExtensionCommandContext for testing extractMermaidBlocks. */
+function mockCtx(entries: Array<{ type: string; message?: unknown }>): ExtensionCommandContext {
+	return {
+		sessionManager: {
+			getEntries: () => entries,
+		},
+		ui: { notify: vi.fn() },
+		hasUI: true,
+		cwd: "/test",
+	} as unknown as ExtensionCommandContext;
+}
+
+// ============================================================================
+// sanitize
+// ============================================================================
+
+describe("sanitize", () => {
+	it("returns unchanged code for clean input", () => {
+		const input = `graph TD\n  A --> B`;
+		const result = sanitize(input);
+		expect(result.code).toBe(input);
+		expect(result.fixes).toEqual([]);
+	});
+
+	it("removes emoji characters", () => {
+		const input = "graph TD\n  A[Hello 😀 World 🚀] --> B";
+		const result = sanitize(input);
+		expect(result.code).not.toMatch(/😀/u);
+		expect(result.code).not.toMatch(/🚀/u);
+		expect(result.fixes).toContain("emoji removed");
+	});
+
+	it("collapses multiple spaces after emoji removal", () => {
+		const input = "graph TD\n  A😀  B😀   C";
+		const result = sanitize(input);
+		expect(result.code).not.toMatch(/  +/);
+	});
+
+	it("wraps subgraph labels containing special characters in quotes", () => {
+		const input = `graph TD
+  subgraph Group (A)
+    A --> B
+  end`;
+		const result = sanitize(input);
+		expect(result.code).toContain('sg1 ["Group (A)"]');
+		expect(result.fixes).toContain('subgraph → sg1 ["Group (A)"]');
+	});
+
+	it("wraps subgraph labels with curly braces", () => {
+		const input = `graph TD
+  subgraph Items {x, y}
+    A --> B
+  end`;
+		const result = sanitize(input);
+		expect(result.code).toContain('sg1 ["Items {x, y}"]');
+	});
+
+	it("wraps subgraph labels with angle brackets", () => {
+		const input = "graph TD\n  subgraph Conditional <x>\n    A --> B\n  end";
+		const result = sanitize(input);
+		expect(result.code).toContain('sg1 ["Conditional <x>"]');
+	});
+
+	it("does not wrap subgraph labels that already have brackets or quotes", () => {
+		const input = 'graph TD\n  subgraph [Already Safe]\n    A --> B\n  end';
+		const result = sanitize(input);
+		expect(result.code).toBe(input);
+		expect(result.fixes).toEqual([]);
+	});
+
+	it("does not wrap subgraph labels that start with double quotes", () => {
+		const input = 'graph TD\n  subgraph "Already Quoted"\n    A --> B\n  end';
+		const result = sanitize(input);
+		expect(result.code).toBe(input);
+	});
+
+	it("increments subgraph counter for multiple wrapped subgraphs", () => {
+		const input = `graph TD
+  subgraph First (Group)
+    A --> B
+  end
+  subgraph Second {Group}
+    C --> D
+  end`;
+		const result = sanitize(input);
+		expect(result.code).toContain('sg1 ["First (Group)"]');
+		expect(result.code).toContain('sg2 ["Second {Group}"]');
+	});
+
+	it("wraps node labels containing special characters in double quotes", () => {
+		const input = "graph TD\n  A[Node (with parens)] --> B";
+		const result = sanitize(input);
+		expect(result.code).toContain('A["Node (with parens)"]');
+		expect(result.fixes).toContain('node A → ["Node (with parens)"]');
+	});
+
+	it("wraps node labels with nested brackets", () => {
+		const input = "graph TD\n  A[Value: {key}] --> B";
+		const result = sanitize(input);
+		expect(result.code).toContain('A["Value: {key}"]');
+	});
+
+	it("handles multiple node fixes in the same line", () => {
+		const input = "A[Hello (world)] --> B[Goodbye {everyone}]";
+		const result = sanitize(input);
+		expect(result.code).toContain('A["Hello (world)"]');
+		expect(result.code).toContain('B["Goodbye {everyone}"]');
+	});
+
+	it("strips existing double quotes from node labels before rewrapping", () => {
+		const input = 'A["Already (quoted)"] --> B';
+		const result = sanitize(input);
+		expect(result.code).toContain('A["Already (quoted)"]');
+	});
+
+	it("does not modify node labels without special characters", () => {
+		const input = "graph TD\n  A[Normal Label] --> B[Another]";
+		const result = sanitize(input);
+		expect(result.code).toBe(input);
+	});
+
+	it("returns empty string unchanged", () => {
+		const result = sanitize("");
+		expect(result.code).toBe("");
+		expect(result.fixes).toEqual([]);
+	});
+});
+
+// ============================================================================
+// renderHtml
+// ============================================================================
+
+describe("renderHtml", () => {
+	it("embeds diagram data as JSON in the script tag", () => {
+		const diagrams: DiagramData[] = [
+			{ code: "graph TD\n  A --> B", fixes: [], label: "Diagram 1" },
+		];
+		const html = renderHtml(diagrams, "dark");
+		expect(html).toContain('"code":"graph TD\\n  A --> B"');
+		expect(html).toContain('"label":"Diagram 1"');
+	});
+
+	it("sets body class based on theme", () => {
+		const darkHtml = renderHtml([], "dark");
+		expect(darkHtml).toContain('class="bg-dark"');
+
+		const lightHtml = renderHtml([], "light");
+		expect(lightHtml).toContain('class="bg-light"');
+	});
+
+	it("sets INIT_BG variable to the theme in script", () => {
+		const html = renderHtml([], "dark");
+		expect(html).toContain('INIT_BG = "dark"');
+	});
+
+	it("sets bgsel to theme in script", () => {
+		const html = renderHtml([], "light");
+		expect(html).toContain('getElementById("bgsel").value = INIT_BG');
+	});
+
+	it("handles empty diagrams array", () => {
+		const html = renderHtml([], "dark");
+		expect(html).toContain("const DIAGRAMS = []");
+		expect(html).toBeTruthy();
+	});
+
+	it("produces valid HTML structure with all key elements", () => {
+		const diagrams: DiagramData[] = [
+			{ code: "A --> B", fixes: ["emoji removed"], label: "Test" },
+		];
+		const html = renderHtml(diagrams, "dark");
+
+		// Document structure
+		expect(html).toContain("<!DOCTYPE html>");
+		expect(html).toContain("</html>");
+
+		// UI elements
+		expect(html).toContain("PNG");
+		expect(html).toContain("SVG");
+		expect(html).toContain('id="cb"');
+		expect(html).toContain('id="sb"');
+
+		// Background selector
+		expect(html).toContain('value="dark"');
+		expect(html).toContain('value="light"');
+		expect(html).toContain('value="white"');
+
+		// Zoom controls exist via onclick handlers
+		expect(html).toContain("zoom(-10)");
+		expect(html).toContain("zoom(10)");
+		expect(html).toContain("zoom(0)");
+
+		// Dark/Light/White theme selector
+		expect(html).toContain('value="dark"');
+		expect(html).toContain('value="light"');
+		expect(html).toContain('value="white"');
+	});
+
+	it("does not create tabs when only one diagram", () => {
+		const diagrams: DiagramData[] = [
+			{ code: "A --> B", fixes: [], label: "Only" },
+		];
+		const html = renderHtml(diagrams, "dark");
+		// No tab creation logic for single diagram
+		expect(html).toContain('if (DIAGRAMS.length > 1)');
+		// Tabs div will be empty
+	});
+
+	it("embeds multiple diagrams correctly", () => {
+		const diagrams: DiagramData[] = [
+			{ code: "A --> B", fixes: [], label: "#1" },
+			{ code: "C --> D", fixes: ["emoji removed"], label: "#2" },
+		];
+		const html = renderHtml(diagrams, "dark");
+		expect(html).toContain('"code":"A --> B"');
+		expect(html).toContain('"code":"C --> D"');
+		expect(html).toContain('"label":"#1"');
+		expect(html).toContain('"label":"#2"');
+	});
+
+	it("embeds fixes array", () => {
+		const diagrams: DiagramData[] = [
+			{ code: "A --> B", fixes: ["fix1", "fix2"], label: "D" },
+		];
+		const html = renderHtml(diagrams, "dark");
+		expect(html).toContain('"fixes":["fix1","fix2"]');
+	});
+});
+
+// ============================================================================
+// extractMermaidBlocks
+// ============================================================================
+
+describe("extractMermaidBlocks", () => {
+	it("returns empty array when no entries", () => {
+		const ctx = mockCtx([]);
+		expect(extractMermaidBlocks(ctx)).toEqual([]);
+	});
+
+	it("returns empty array when no mermaid blocks in messages", () => {
+		const ctx = mockCtx([
+			messageEntry(assistantMessage([textContentBlock("plain text")])),
+		]);
+		expect(extractMermaidBlocks(ctx)).toEqual([]);
+	});
+
+	it("ignores non-message entries", () => {
+		const ctx = mockCtx([customEntry("some-type", { key: "val" })]);
+		expect(extractMermaidBlocks(ctx)).toEqual([]);
+	});
+
+	it("ignores user messages", () => {
+		const userMsg = userMessage("```mermaid\ngraph TD\n  A --> B\n```");
+		const ctx = mockCtx([messageEntry(userMsg)]);
+		expect(extractMermaidBlocks(ctx)).toEqual([]);
+	});
+
+	it("extracts a single mermaid block", () => {
+		const msg = assistantMessage([
+			textContentBlock("```mermaid\ngraph TD\n  A --> B\n```"),
+		]);
+		const ctx = mockCtx([messageEntry(msg)]);
+		const blocks = extractMermaidBlocks(ctx);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0].raw).toBe("graph TD\n  A --> B");
+		expect(blocks[0].label).toBe("Diagram 1");
+	});
+
+	it("extracts multiple blocks from one message", () => {
+		const msg = assistantMessage([
+			textContentBlock(
+				"```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\nsequenceDiagram\n  A ->> B\n```",
+			),
+		]);
+		const ctx = mockCtx([messageEntry(msg)]);
+		const blocks = extractMermaidBlocks(ctx);
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0].raw).toBe("graph TD\n  A --> B");
+		expect(blocks[1].raw).toBe("sequenceDiagram\n  A ->> B");
+	});
+
+	it("extracts blocks from multiple messages", () => {
+		const msg1 = assistantMessage([textContentBlock("```mermaid\nA --> B\n```")]);
+		const msg2 = assistantMessage([textContentBlock("```mermaid\nC --> D\n```")]);
+		const ctx = mockCtx([messageEntry(msg1), messageEntry(msg2)]);
+		const blocks = extractMermaidBlocks(ctx);
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0].raw).toBe("A --> B");
+		expect(blocks[1].raw).toBe("C --> D");
+	});
+
+	it("skips non-text content blocks (images)", () => {
+		const msg = assistantMessage([
+			imageContentBlock(),
+			textContentBlock("```mermaid\nA --> B\n```"),
+		]);
+		const ctx = mockCtx([messageEntry(msg)]);
+		const blocks = extractMermaidBlocks(ctx);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0].raw).toBe("A --> B");
+	});
+
+	it("handles mermaid block with surrounding whitespace", () => {
+		const msg = assistantMessage([
+			textContentBlock("Some text\n```mermaid\n  A --> B  \n```\nMore text"),
+		]);
+		const ctx = mockCtx([messageEntry(msg)]);
+		const blocks = extractMermaidBlocks(ctx);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0].raw).toBe("A --> B");
+	});
+
+	it("handles mermaid block with no language specifier space", () => {
+		const msg = assistantMessage([textContentBlock("```mermaid\nA --> B\n```")]);
+		const ctx = mockCtx([messageEntry(msg)]);
+		const blocks = extractMermaidBlocks(ctx);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0].raw).toBe("A --> B");
+	});
+
+	it("numbers diagrams incrementally across messages", () => {
+		const msg1 = assistantMessage([textContentBlock("```mermaid\nA --> B\n```")]);
+		const msg2 = assistantMessage([textContentBlock("```mermaid\nC --> D\n```")]);
+		const ctx = mockCtx([messageEntry(msg1), messageEntry(msg2)]);
+		const blocks = extractMermaidBlocks(ctx);
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0].label).toBe("Diagram 1");
+		expect(blocks[1].label).toBe("Diagram 2");
+	});
+
+	it("ignores code blocks that are not mermaid", () => {
+		const msg = assistantMessage([
+			textContentBlock("```typescript\nconst x = 1;\n```"),
+		]);
+		const ctx = mockCtx([messageEntry(msg)]);
+		expect(extractMermaidBlocks(ctx)).toEqual([]);
+	});
+});
+
+// ============================================================================
+// labelBlocks
+// ============================================================================
+
+describe("labelBlocks", () => {
+	it("labels a single block as 'Diagram'", () => {
+		const blocks: MermaidBlock[] = [{ raw: "A --> B", label: "original" }];
+		labelBlocks(blocks);
+		expect(blocks[0].label).toBe("Diagram");
+	});
+
+	it("labels two blocks with latest marker on first", () => {
+		const blocks: MermaidBlock[] = [
+			{ raw: "older", label: "x" },
+			{ raw: "newer", label: "y" },
+		];
+		labelBlocks(blocks);
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0].label).toBe("#2 (latest)");
+		expect(blocks[1].label).toBe("#1");
+	});
+
+	it("labels three blocks correctly", () => {
+		const blocks: MermaidBlock[] = [
+			{ raw: "a", label: "x" },
+			{ raw: "b", label: "y" },
+			{ raw: "c", label: "z" },
+		];
+		labelBlocks(blocks);
+		expect(blocks[0].label).toBe("#3 (latest)");
+		expect(blocks[1].label).toBe("#2");
+		expect(blocks[2].label).toBe("#1");
+	});
+
+	it("reverses the blocks array in place", () => {
+		const blocks: MermaidBlock[] = [
+			{ raw: "first", label: "x" },
+			{ raw: "second", label: "y" },
+			{ raw: "third", label: "z" },
+		];
+		labelBlocks(blocks);
+		expect(blocks[0].raw).toBe("third");
+		expect(blocks[1].raw).toBe("second");
+		expect(blocks[2].raw).toBe("first");
+	});
+});
+
+// ============================================================================
+// HTML structure assertions — canvas layout (tasks 3.1)
+// ============================================================================
+
+describe("renderHtml — canvas layout structure", () => {
+	function html() {
+		return renderHtml([{ code: "A --> B", fixes: [], label: "D" }], "dark");
+	}
+
+	it("renders toolbar with position:fixed overlay", () => {
+		expect(html()).toMatch(/\.bar\{position:fixed/);
+	});
+
+	it("renders canvas viewport with overflow:hidden", () => {
+		expect(html()).toMatch(/canvas-viewport\{[^}]*overflow:hidden/);
+	});
+
+	it("renders floating zoom bar with position:fixed", () => {
+		expect(html()).toMatch(/\.zoom-bar\{position:fixed/);
+	});
+
+	it("zoom bar is centered with translateX(-50%)", () => {
+		expect(html()).toContain("transform:translateX(-50%)");
+	});
+
+	it("floating bar has z-index above canvas", () => {
+		expect(html()).toMatch(/zoom-bar\{[^}]*z-index:10/);
+	});
+
+	it("canvas viewport has top padding for floating bars", () => {
+		expect(html()).toMatch(/canvas-viewport\{[^}]*padding:60px 24px 24px 24px/);
+	});
+
+	it("tabs use position:fixed overlay", () => {
+		expect(html()).toMatch(/\.tabs\{position:fixed/);
+	});
+
+	it("zoom bar is positioned in body alongside tabs and toolbar", () => {
+		const h = html();
+		expect(h).toContain('class="zoom-bar" id="zb"');
+	});
+
+	it("loading indicator exists with Loading diagram... text", () => {
+		expect(html()).toContain('class="loading" id="ld"');
+		expect(html()).toContain("Loading diagram...");
+	});
+
+	it("error div is inside canvas-viewport", () => {
+		const h = html();
+		const canvasStart = h.indexOf("id=\"canvas-viewport\"");
+		const errPos = h.indexOf('class="err" id="er"');
+		expect(errPos).toBeGreaterThan(canvasStart);
+	});
+});
+
+// ============================================================================
+// HTML structure assertions — icon controls (tasks 3.2)
+// ============================================================================
+
+describe("renderHtml — icon controls", () => {
+	function html() {
+		return renderHtml([{ code: "A --> B", fixes: [], label: "D" }], "dark");
+	}
+
+	it("zoom-out button has SVG child", () => {
+		expect(html()).toContain('id="zout"');
+		expect(html()).toMatch(/zout[^>]*>\s*<svg/);
+	});
+
+	it("zoom-in button has SVG child", () => {
+		expect(html()).toContain('id="zin"');
+		expect(html()).toMatch(/zin[^>]*>\s*<svg/);
+	});
+
+	it("reset button has SVG child", () => {
+		expect(html()).toContain('id="zreset"');
+		expect(html()).toMatch(/zreset[^>]*>\s*<svg/);
+	});
+
+	it("zoom-out button has title and aria-label", () => {
+		expect(html()).toMatch(/id="zout"[^>]*title="Zoom out"[^>]*aria-label="Zoom out"/);
+	});
+
+	it("zoom-in button has title and aria-label", () => {
+		expect(html()).toMatch(/id="zin"[^>]*title="Zoom in"[^>]*aria-label="Zoom in"/);
+	});
+
+	it("reset button has title and aria-label", () => {
+		expect(html()).toMatch(/id="zreset"[^>]*title="Reset view"[^>]*aria-label="Reset view"/);
+	});
+
+	it("zoom percentage label has aria-live=polite", () => {
+		expect(html()).toMatch(/id="zl"[^>]*aria-live="polite"/);
+	});
+
+	it("zoom percentage label has role=status", () => {
+		expect(html()).toMatch(/id="zl"[^>]*role="status"/);
+	});
+
+	it("buttons have focus-visible style for keyboard nav", () => {
+		expect(html()).toContain("focus-visible");
+	});
+
+	it("zoom bar has rounded border-radius", () => {
+		expect(html()).toMatch(/zoom-bar\{[^}]*border-radius:10px/);
+	});
+
+	it("zoom bar buttons use currentColor for SVGs", () => {
+		expect(html()).toContain("stroke:currentColor");
+	});
+
+	it("trackpad pinch-to-zoom handler exists", () => {
+		expect(html()).toContain('addEventListener("wheel"');
+		expect(html()).toContain("ctrlKey");
+		expect(html()).toContain("preventDefault");
+	});
+
+	it("disabled buttons have reduced opacity and no pointer events", () => {
+		expect(html()).toMatch(/button:disabled\{opacity:\.3;pointer-events:none\}/);
+	});
+});
+
+// ============================================================================
+// HTML structure assertions — new states (tasks 3.3)
+// ============================================================================
+
+describe("renderHtml — interaction states", () => {
+	it("zoom uses SVG attribute sizing not CSS transform", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain("svgNaturalW");
+		expect(h).toContain('setAttribute("width"');
+		expect(h).toContain('setAttribute("height"');
+	});
+
+	it("updateZoomButtons function exists in script", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain("function updateZoomButtons()");
+	});
+
+	it("zooms disable zoom-in at 400%", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain('zin").disabled = zoomLevel >= 400');
+	});
+
+	it("zooms disable zoom-out at 25%", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain('zout").disabled = zoomLevel <= 25');
+	});
+
+	it("reset calls resetPan to zero pan position", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain("resetPan");
+	});
+
+	it("tab switch resets zoom to 100%", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain("zoomLevel = 100");
+	});
+});
+
+// ============================================================================
+// HTML structure assertions — PNG export (tasks 3.5)
+// ============================================================================
+
+describe("renderHtml — PNG export", () => {
+	it("export scales canvas to 3x natural SVG dimensions", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain("svgNaturalSize");
+		expect(h).toContain("const scale = 3");
+		expect(h).toContain("canvas.width = w * scale");
+	});
+
+	it("export uses current theme background color", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain('bgFill[currentBg]');
+	});
+
+	it("export PNG reads SVG viewBox for true 2x resolution", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain("viewBox?.baseVal");
+		expect(h).toContain("getBBox");
+	});
+
+	it("SVG export serializes and downloads SVG file", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toContain("exportSvg");
+		expect(h).toContain("image/svg+xml");
+		expect(h).toContain(".svg");
+	});
+});

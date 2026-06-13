@@ -1,0 +1,547 @@
+/**
+ * pi-mermaid-viewer
+ *
+ * Renders Mermaid diagrams found in the conversation as an HTML page
+ * opened in the default browser. Supports dark/light themes, zoom,
+ * PNG export, and split source view.
+ */
+
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { exec, execSync } from "node:child_process";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface DiagramData {
+  code: string;
+  fixes: string[];
+  label: string;
+}
+
+export interface MermaidBlock {
+  raw: string;
+  label: string;
+}
+
+// ============================================================================
+// Mermaid sanitizer
+// ============================================================================
+
+export function sanitize(raw: string): { code: string; fixes: string[] } {
+  const fixes: string[] = [];
+  let code = raw;
+
+  // Remove emoji characters that Mermaid cannot render
+  const stripped = code.replace(
+    /[\p{Emoji_Presentation}\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu,
+    "",
+  );
+  if (stripped !== code) {
+    code = stripped.replace(/  +/g, " ");
+    fixes.push("emoji removed");
+  }
+
+  // Wrap subgraph labels with special characters in quotes
+  let sgCounter = 0;
+  code = code
+    .split("\n")
+    .map((line) => {
+      const m = line.match(/^(\s*subgraph\s+)(.+)$/);
+      if (!m) return line;
+      let label = m[2].trim();
+      if (label.startsWith("[") || label.startsWith('"')) return line;
+      if (/[(){}<>]/.test(label)) {
+        sgCounter += 1;
+        fixes.push(`subgraph → sg${sgCounter} ["${label}"]`);
+        return `${m[1]}sg${sgCounter} ["${label}"]`;
+      }
+      return line;
+    })
+    .join("\n");
+
+  // Wrap node labels containing special characters in double quotes
+  code = code.replace(
+    /(\w+)\[([^\]]*[(){}][^\]]*)\]/g,
+    (_match, id: string, label: string) => {
+      const clean = label.replace(/^"+|"+$/g, "").trim();
+      fixes.push(`node ${id} → ["${clean}"]`);
+      return `${id}["${clean}"]`;
+    },
+  );
+
+  return { code, fixes };
+}
+
+// ============================================================================
+// System theme detection (macOS only)
+// ============================================================================
+
+function detectSystemTheme(): "dark" | "light" {
+  try {
+    const out = execSync("defaults read -g AppleInterfaceStyle 2>/dev/null")
+      .toString()
+      .trim();
+    return out === "Dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+// ============================================================================
+// HTML page template
+// ============================================================================
+
+export function renderHtml(diagrams: DiagramData[], theme: "dark" | "light"): string {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Mermaid Viewer</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:-apple-system,sans-serif;color:#c9d1d9;padding:0;transition:background .3s}
+.bg-dark{background:#0d1117} .bg-light{background:#f6f8fa} .bg-white{background:#fff}
+.bg-dark #canvas-viewport{background-image:radial-gradient(circle,rgba(255,255,255,.06) 1px,transparent 1px)}
+.bg-light #canvas-viewport{background-image:radial-gradient(circle,rgba(0,0,0,.08) 1px,transparent 1px)}
+.bg-white #canvas-viewport{background-image:radial-gradient(circle,rgba(0,0,0,.06) 1px,transparent 1px)}
+.bar{position:fixed;top:16px;right:16px;z-index:99;
+  display:flex;gap:4px;align-items:center;height:32px;flex-wrap:wrap;
+  background:rgba(22,27,34,.85);backdrop-filter:blur(12px);
+  padding:4px 10px;border-radius:10px;border:1px solid rgba(48,54,61,.6);
+  box-shadow:0 2px 12px rgba(0,0,0,.3)}
+.bar .title{display:none}
+.bar button,.bar select{padding:3px 8px;border:none;border-radius:6px;font-size:11px;font-weight:600;
+  cursor:pointer;color:#c9d1d9;transition:.15s;background:rgba(48,54,61,.4);line-height:1}
+.bar button:hover,.bar select:hover{background:rgba(48,54,61,.8)}
+.bc:hover{background:#e94560!important}.be:hover{background:#238636!important}
+.tabs{position:fixed;top:16px;left:16px;right:auto;z-index:98;
+  display:flex;gap:4px;align-items:center;height:32px;padding:0;overflow-x:auto;
+  max-width:calc(100vw - 320px)}
+.tabs:empty{display:none}
+.tab{padding:5px 12px;font-size:11px;font-weight:600;color:#8b949e;cursor:pointer;
+  background:rgba(22,27,34,.85);backdrop-filter:blur(12px);
+  border:1px solid rgba(48,54,61,.6);border-radius:8px;
+  white-space:nowrap;transition:.15s;line-height:1}
+.tab:hover{color:#c9d1d9;background:rgba(48,54,61,.6)}
+.tab.active{color:#58a6ff;background:rgba(31,111,235,.2);border-color:rgba(88,166,255,.4)}
+.content{display:flex;min-height:100vh}
+.content.split #canvas-viewport{border-right:1px solid #30363d}
+#canvas-viewport{flex:1;overflow:hidden;padding:60px 24px 24px 24px;cursor:grab;user-select:none;
+  background-image:radial-gradient(circle,rgba(128,128,128,.15) 1px,transparent 1px);
+  background-size:20px 20px;text-align:center;position:relative}
+#canvas-viewport>*+*{margin-top:12px}
+#canvas-viewport:active{cursor:grabbing}
+#canvas-viewport.dragging{cursor:grabbing;scroll-behavior:auto}
+#src-wrap{display:none;flex:1;overflow:hidden;border-left:1px solid #30363d}
+.content.split #src-wrap{display:flex;flex-direction:column}
+#src{white-space:pre-wrap;font-family:"SF Mono",monospace;font-size:12px;
+  line-height:1.7;background:#161b22;padding:16px;user-select:all;flex:1;overflow:auto;color:#c9d1d9}
+#svg-wrap{display:inline-block;position:relative;left:0;top:0;vertical-align:top}
+#svg-wrap svg{max-width:100%;height:auto;display:block}
+.loading{color:#8b949e;font-size:14px;padding:40px 0;width:100%}
+.fixes{position:fixed;bottom:16px;right:16px;z-index:10;
+  background:rgba(28,18,4,.85);backdrop-filter:blur(8px);
+  border:1px solid rgba(187,128,9,.4);border-radius:8px;padding:6px 12px;
+  font-size:11px;color:#d29922;max-width:320px;display:none}
+.err{background:#1c0a0a;border:1px solid #f85149;border-radius:6px;padding:16px;
+  color:#f85149;font-family:monospace;white-space:pre-wrap;display:none;margin-bottom:12px;max-width:960px;width:100%}
+.src-header{padding:8px 16px;background:#161b22;border-bottom:1px solid #30363d;
+  display:flex;align-items:center;gap:8px}
+.src-header span{color:#8b949e;font-size:12px;flex:1}
+.src-header button{background:#30363d;border:none;border-radius:4px;color:#c9d1d9;
+  padding:4px 10px;font-size:11px;cursor:pointer}
+.src-header button:hover{background:#484f58}
+.split-toggle{background:#6e40c9!important}.split-toggle:hover{background:#8957e5!important}
+.zoom-bar{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10;
+  display:flex;align-items:center;gap:4px;height:32px;padding:4px 10px;
+  border-radius:10px;
+  background:rgba(22,27,34,.85);backdrop-filter:blur(12px);
+  border:1px solid rgba(48,54,61,.6);box-shadow:0 2px 12px rgba(0,0,0,.3)}
+.zoom-bar button{background:transparent;border:none;border-radius:5px;width:24px;height:24px;
+  padding:2px;cursor:pointer;color:#8b949e;display:flex;align-items:center;justify-content:center;
+  transition:all .15s}
+.zoom-bar button:hover{color:#c9d1d9;background:rgba(48,54,61,.5)}
+.zoom-bar button:disabled{opacity:.3;pointer-events:none}
+.zoom-bar button:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}
+.zoom-bar span{color:#8b949e;font-size:11px;min-width:36px;text-align:center;
+  font-variant-numeric:tabular-nums;line-height:1}
+.zoom-bar svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round}
+</style></head><body class="bg-${theme}">
+<div class="bar">
+  <span id="title" style="display:none"></span>
+  <select id="bgsel" onchange="setBg(this.value)">
+    <option value="dark">Dark</option>
+    <option value="light">Light</option>
+    <option value="white">White</option>
+  </select>
+  <button onclick="exportSvg()">SVG</button>
+  <button class="be" onclick="exportPng()">PNG</button>
+  <button class="bc" id="cb" onclick="copyCode()">Copy</button>
+  <button class="bs" id="sb" onclick="toggleSrc()">Split</button>
+</div>
+<div class="tabs" id="tabs"></div>
+<div class="content" id="content">
+  <div id="canvas-viewport">
+    <div class="loading" id="ld">Loading diagram...</div>
+    <div class="fixes" id="fx"></div>
+    <div class="err" id="er"></div>
+    <div id="svg-wrap"><div id="svg"></div></div>
+  </div>
+  <div id="src-wrap">
+    <div class="src-header">
+      <span id="srcLabel">SOURCE</span>
+      <button onclick="copySrc()">Copy</button>
+    </div>
+    <div id="src"></div>
+  </div>
+  <div class="zoom-bar" id="zb">
+    <button id="zout" title="Zoom out" aria-label="Zoom out" onclick="zoom(-10)">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/><path d="M8 11h6"/></svg>
+    </button>
+    <span id="zl" aria-live="polite" role="status">100%</span>
+    <button id="zin" title="Zoom in" aria-label="Zoom in" onclick="zoom(10)">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/><path d="M8 11h6"/><path d="M11 8v6"/></svg>
+    </button>
+    <button id="zreset" title="Reset view" aria-label="Reset view" onclick="zoom(0)">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+    </button>
+  </div>
+</div>
+<script type="module">
+const DIAGRAMS = ${JSON.stringify(diagrams)};
+const INIT_BG = "${theme}";
+
+let zoomLevel = 100;
+let svgNaturalW = -1, svgNaturalH = -1;
+let mermaidLib = null;
+let currentBg = INIT_BG;
+let activeIdx = 0;
+
+const bgClass = { dark: "bg-dark", light: "bg-light", white: "bg-white" };
+const bgFill  = { dark: "#0d1117", light: "#f6f8fa", white: "#ffffff" };
+const themeMap = { dark: "dark", light: "default", white: "base" };
+
+document.getElementById("bgsel").value = INIT_BG;
+
+if (DIAGRAMS.length > 1) {
+  DIAGRAMS.forEach((d, i) => {
+    const t = document.createElement("div");
+    t.className = "tab" + (i === 0 ? " active" : "");
+    t.textContent = d.label;
+    t.onclick = () => switchTab(i);
+    document.getElementById("tabs").appendChild(t);
+  });
+}
+
+function updateZoomButtons() {
+  document.getElementById("zin").disabled = zoomLevel >= 400;
+  document.getElementById("zout").disabled = zoomLevel <= 25;
+}
+
+function switchTab(idx) {
+  activeIdx = idx;
+  document.querySelectorAll(".tab").forEach((t, i) =>
+    t.classList.toggle("active", i === idx));
+  zoomLevel = 100;
+  updateZoomButtons();
+  if (window.resetPan) window.resetPan();
+  render(themeMap[currentBg] || "dark");
+  document.getElementById("srcLabel").textContent = "SOURCE #" + (idx + 1);
+}
+
+async function render(theme) {
+  const d = DIAGRAMS[activeIdx];
+  document.getElementById("ld").style.display = "block";
+  document.getElementById("svg").innerHTML = "";
+  document.getElementById("fx").style.display = "none";
+  document.getElementById("er").style.display = "none";
+  try {
+    if (!mermaidLib) {
+      mermaidLib = (await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")).default;
+    }
+    mermaidLib.initialize({startOnLoad:false,theme:theme,securityLevel:"loose",
+      themeVariables: theme === "dark" ? {} : { fontSize:"14px", fontFamily:"-apple-system,sans-serif" },
+      flowchart:{useMaxWidth:true,htmlLabels:true,curve:"basis"}});
+    const {svg} = await mermaidLib.render("r" + Date.now(), d.code);
+    document.getElementById("ld").style.display = "none";
+    document.getElementById("svg").innerHTML = svg;
+    document.getElementById("title").textContent = d.label;
+
+    const svgEl = document.querySelector("#svg svg");
+    if (svgEl) {
+      svgNaturalW = svgEl.viewBox?.baseVal?.width || svgEl.getBBox?.().width || 400;
+      svgNaturalH = svgEl.viewBox?.baseVal?.height || svgEl.getBBox?.().height || 300;
+      svgEl.setAttribute("width", String(svgNaturalW));
+      svgEl.setAttribute("height", String(svgNaturalH));
+      const wrap = document.getElementById("svg-wrap");
+      wrap.style.width = svgNaturalW + "px";
+      wrap.style.maxWidth = "";
+    }
+    document.getElementById("er").style.display = "none";
+
+    const fxEl = document.getElementById("fx");
+    if (d.fixes.length) {
+      fxEl.innerHTML = "<strong>Sanitized:</strong> " + d.fixes.map(f => f.replace(/&/g,"&amp;").replace(/</g,"&lt;")).join(" &middot; ");
+      fxEl.style.display = "block";
+    } else {
+      fxEl.style.display = "none";
+    }
+  } catch(e) {
+    document.getElementById("ld").style.display = "none";
+    const el = document.getElementById("er");
+    el.textContent = e.message; el.style.display = "block";
+    document.getElementById("title").textContent = "Error";
+  }
+  document.getElementById("src").textContent = d.code;
+}
+render(themeMap[INIT_BG] || "dark");
+updateZoomButtons();
+
+function applyZoom() {
+  const svgEl = document.querySelector("#svg svg");
+  if (!svgEl || svgNaturalW <= 0) return;
+  const s = zoomLevel / 100;
+  const zw = Math.round(svgNaturalW * s);
+  const zh = Math.round(svgNaturalH * s);
+  svgEl.setAttribute("width", String(zw));
+  svgEl.setAttribute("height", String(zh));
+  svgEl.style.maxWidth = zoomLevel > 100 ? "none" : "";
+  const wrap = document.getElementById("svg-wrap");
+  wrap.style.width = zw + "px";
+  wrap.style.maxWidth = zoomLevel > 100 ? "none" : "";
+  document.getElementById("zl").textContent = zoomLevel + "%";
+  updateZoomButtons();
+}
+
+window.zoom = function(delta) {
+  if (delta === 0) {
+    zoomLevel = 100;
+    if (window.resetPan) window.resetPan();
+  } else {
+    zoomLevel = Math.max(25, Math.min(400, zoomLevel + delta));
+  }
+  applyZoom();
+};
+
+// Ctrl+scroll = zoom (intercept before browser handles it)
+window.addEventListener("wheel", function(e) {
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    zoomLevel = Math.max(25, Math.min(400, zoomLevel + (e.deltaY < 0 ? 10 : -10)));
+    applyZoom();
+  }
+}, { passive: false });
+
+window.setBg = function(v) {
+  currentBg = v;
+  document.body.className = bgClass[v] || "bg-dark";
+  render(themeMap[v] || "dark");
+};
+
+function getSvgEl() { return document.querySelector("#svg svg"); }
+
+function svgNaturalSize(el) {
+  const vb = el.viewBox?.baseVal;
+  if (vb && vb.width > 0 && vb.height > 0) return { w: vb.width, h: vb.height };
+  const bbox = el.getBBox?.();
+  if (bbox) return { w: bbox.width, h: bbox.height };
+  return { w: el.getBoundingClientRect().width, h: el.getBoundingClientRect().height };
+}
+
+window.exportSvg = function() {
+  const svgEl = getSvgEl();
+  if (!svgEl) { alert("No diagram to export"); return; }
+  const d = DIAGRAMS[activeIdx];
+  const clone = svgEl.cloneNode(true);
+  const { w, h } = svgNaturalSize(svgEl);
+  clone.setAttribute("width", w);
+  clone.setAttribute("height", h);
+  clone.style.background = bgFill[currentBg] || "#0d1117";
+  const data = new XMLSerializer().serializeToString(clone);
+  const blob = new Blob([data], { type: "image/svg+xml" });
+  const a = document.createElement("a");
+  a.download = (d.label || "mermaid") + "-" + Date.now() + ".svg";
+  a.href = URL.createObjectURL(blob);
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+window.exportPng = function() {
+  const svgEl = getSvgEl();
+  if (!svgEl) { alert("No diagram to export"); return; }
+  const d = DIAGRAMS[activeIdx];
+  const { w, h } = svgNaturalSize(svgEl);
+  const scale = 3;
+  const canvas = document.createElement("canvas");
+  canvas.width = w * scale; canvas.height = h * scale;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = bgFill[currentBg] || "#0d1117";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const data = new XMLSerializer().serializeToString(svgEl);
+  const img = new Image();
+  img.onload = function() {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const a = document.createElement("a");
+    a.download = (d.label || "mermaid") + "-" + Date.now() + ".png";
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+  };
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(data);
+};
+
+window.copyCode = function() {
+  navigator.clipboard.writeText(DIAGRAMS[activeIdx].code).then(() => {
+    const b = document.getElementById("cb"); b.textContent = "Copied!";
+    setTimeout(() => b.textContent = "Copy", 1500);
+  });
+};
+window.copySrc = function() {
+  navigator.clipboard.writeText(DIAGRAMS[activeIdx].code).then(function() {
+    var b = document.querySelector(".src-header button");
+    b.textContent = "Copied!";
+    setTimeout(function() { b.textContent = "Copy"; }, 1500);
+  });
+};
+
+// Drag-to-pan — global vars for reliable access
+let _panX = 0, _panY = 0;
+let _dragging = false, _mx = 0, _my = 0, _sx = 0, _sy = 0;
+function _applyPan() {
+  const w = document.getElementById("svg-wrap");
+  if (w) { w.style.left = _panX + "px"; w.style.top = _panY + "px"; }
+}
+document.addEventListener("mousedown", function(e) {
+  if (e.button > 0) return;
+  if (e.target.closest("button") || e.target.closest("select")) return;
+  if (!document.getElementById("canvas-viewport").contains(e.target)) return;
+  e.preventDefault();
+  _dragging = true;
+  _mx = e.pageX; _my = e.pageY;
+  _sx = _panX; _sy = _panY;
+  document.getElementById("canvas-viewport").classList.add("dragging");
+});
+document.addEventListener("mousemove", function(e) {
+  if (!_dragging) return;
+  _panX = _sx + e.pageX - _mx;
+  _panY = _sy + e.pageY - _my;
+  _applyPan();
+});
+document.addEventListener("pointermove", function(e) {
+  if (!_dragging) return;
+  _panX = _sx + e.pageX - _mx;
+  _panY = _sy + e.pageY - _my;
+  _applyPan();
+});
+document.addEventListener("mouseup", function() {
+  if (!_dragging) return;
+  _dragging = false;
+  const vp = document.getElementById("canvas-viewport");
+  if (vp) vp.classList.remove("dragging");
+});
+window.resetPan = function() { _panX = 0; _panY = 0; _applyPan(); };
+document.getElementById("svg-wrap").style.position = "relative";
+
+window.toggleSrc = function() {
+  const c = document.getElementById("content");
+  const b = document.getElementById("sb");
+  if (c.classList.contains("split")) {
+    c.classList.remove("split");
+    b.textContent = "Split";
+  } else {
+    c.classList.add("split");
+    b.textContent = "Close";
+  }
+};
+</script></body></html>`;
+}
+
+// ============================================================================
+// Browser opening
+// ============================================================================
+
+function openInBrowser(path: string, ctx: ExtensionCommandContext): void {
+  const cmd =
+    process.platform === "win32"
+      ? "start"
+      : process.platform === "linux"
+        ? "xdg-open"
+        : "open";
+  exec(`${cmd} "${path}"`, (err) => {
+    if (err) {
+      ctx.ui.notify(`Failed to open browser: ${err.message}`, "error");
+    } else {
+      ctx.ui.notify("Opened in browser!", "info");
+    }
+  });
+}
+
+// ============================================================================
+// Mermaid block extraction from session
+// ============================================================================
+
+export function extractMermaidBlocks(ctx: ExtensionCommandContext): MermaidBlock[] {
+  const blocks: MermaidBlock[] = [];
+  let idx = 0;
+
+  for (const entry of ctx.sessionManager.getEntries()) {
+    if (entry.type !== "message") continue;
+    const msg = entry.message;
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type !== "text" || !block.text) continue;
+      for (const m of block.text.matchAll(/```mermaid\s*\n([\s\S]*?)```/g)) {
+        idx += 1;
+        blocks.push({ raw: m[1].trim(), label: `Diagram ${idx}` });
+      }
+    }
+  }
+
+  return blocks;
+}
+
+export function labelBlocks(blocks: MermaidBlock[]): void {
+  blocks.reverse();
+  blocks.forEach((b, i) => {
+    if (blocks.length === 1) {
+      b.label = "Diagram";
+    } else {
+      b.label = `#${blocks.length - i}${i === 0 ? " (latest)" : ""}`;
+    }
+  });
+}
+
+// ============================================================================
+// Extension
+// ============================================================================
+
+export default function (pi: ExtensionAPI): void {
+  pi.registerCommand("mermaid", {
+    description: "Render Mermaid diagrams from the conversation in the browser",
+
+    handler: async (_args, ctx) => {
+      const blocks = extractMermaidBlocks(ctx);
+
+      if (blocks.length === 0) {
+        ctx.ui.notify("No Mermaid diagrams found in the conversation.", "error");
+        return;
+      }
+
+      labelBlocks(blocks);
+
+      const diagrams: DiagramData[] = blocks.map((b) => {
+        const { code, fixes } = sanitize(b.raw);
+        return { code, fixes, label: b.label };
+      });
+
+      const theme = detectSystemTheme();
+      const html = renderHtml(diagrams, theme);
+      const path = join(tmpdir(), `mermaid-${Date.now()}.html`);
+
+      writeFileSync(path, html, "utf-8");
+      openInBrowser(path, ctx);
+    },
+  });
+}

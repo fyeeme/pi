@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023"],
+    "skipLibCheck": true,
+    "paths": {
+      "@earendil-works/pi-coding-agent": ["../../coding-agent/src/index.ts"]
+    }
+  },
+  "include": ["*.ts"]
+}
