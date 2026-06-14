@@ -35,16 +35,6 @@ export function sanitize(raw: string): { code: string; fixes: string[] } {
   const fixes: string[] = [];
   let code = raw;
 
-  // Remove emoji characters that Mermaid cannot render
-  const stripped = code.replace(
-    /[\p{Emoji_Presentation}\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu,
-    "",
-  );
-  if (stripped !== code) {
-    code = stripped.replace(/  +/g, " ");
-    fixes.push("emoji removed");
-  }
-
   // Wrap subgraph labels with special characters in quotes
   let sgCounter = 0;
   code = code
@@ -63,15 +53,35 @@ export function sanitize(raw: string): { code: string; fixes: string[] } {
     })
     .join("\n");
 
-  // Wrap node labels containing special characters in double quotes
-  code = code.replace(
-    /(\w+)\[([^\]]*[(){}][^\]]*)\]/g,
-    (_match, id: string, label: string) => {
-      const clean = label.replace(/^"+|"+$/g, "").trim();
-      fixes.push(`node ${id} → ["${clean}"]`);
-      return `${id}["${clean}"]`;
-    },
-  );
+  // Wrap node labels containing special characters in double quotes.
+  // One alternation pass per node so a cylinder A[(x)] is not re-matched
+  // by the rectangle rule. Longer wrappers come first so ((...)) wins
+  // over (...), [[...]] over [...].
+  const SPECIAL = /[?@<>\/&#!(){}\[\]]/;
+  const SHAPE_RE = /(\w+)(?:\(\(\(([^)]*)\)\)\)|\(\(([^)]*)\)\)|\{\{([^}]*)\}\}|\[\[([^\]]*)\]\]|\[\(([^)]*)\)\]|\[\/([^/]*)\/\]|\{([^}]*)\}|\(([^)]*)\)|\[([^\]]*)\])/g;
+  const SHAPES: ReadonlyArray<{ open: string; close: string }> = [
+    { open: "(((", close: ")))" },
+    { open: "((", close: "))" },
+    { open: "{{", close: "}}" },
+    { open: "[[", close: "]]" },
+    { open: "[(", close: ")]" },
+    { open: "[/", close: "/]" },
+    { open: "{", close: "}" },
+    { open: "(", close: ")" },
+    { open: "[", close: "]" },
+  ];
+  code = code.replace(SHAPE_RE, (match, id: string, ...rest: Array<string | number>) => {
+    const idx = SHAPES.findIndex((_s, i) => rest[i] !== undefined);
+    if (idx < 0) return match;
+    const shape = SHAPES[idx];
+    const label = String(rest[idx]);
+    const trimmed = label.trim();
+    if (trimmed.startsWith('\"') && trimmed.endsWith('\"')) return match;
+    if (!SPECIAL.test(label)) return match;
+    const clean = label.replace(/^"+|"+$/g, "").trim();
+    fixes.push(`node ${id} → ${shape.open}"${clean}"${shape.close}`);
+    return `${id}${shape.open}"${clean}"${shape.close}`;
+  });
 
   return { code, fixes };
 }
@@ -223,6 +233,7 @@ let activeIdx = 0;
 const bgClass = { dark: "bg-dark", light: "bg-light", white: "bg-white" };
 const bgFill  = { dark: "#0d1117", light: "#f6f8fa", white: "#ffffff" };
 const themeMap = { dark: "dark", light: "default", white: "base" };
+const EMOJI_RE = /[\p{Emoji_Presentation}\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu;
 
 document.getElementById("bgsel").value = INIT_BG;
 
@@ -360,7 +371,7 @@ window.exportSvg = function() {
   clone.setAttribute("width", w);
   clone.setAttribute("height", h);
   clone.style.background = bgFill[currentBg] || "#0d1117";
-  const data = new XMLSerializer().serializeToString(clone);
+  const data = new XMLSerializer().serializeToString(clone).replace(EMOJI_RE, "");
   const blob = new Blob([data], { type: "image/svg+xml" });
   const a = document.createElement("a");
   a.download = (d.label || "mermaid") + "-" + Date.now() + ".svg";
@@ -380,7 +391,7 @@ window.exportPng = function() {
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = bgFill[currentBg] || "#0d1117";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const data = new XMLSerializer().serializeToString(svgEl);
+  const data = new XMLSerializer().serializeToString(svgEl).replace(EMOJI_RE, "");
   const img = new Image();
   img.onload = function() {
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);

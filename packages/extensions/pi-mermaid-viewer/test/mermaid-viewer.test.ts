@@ -76,18 +76,19 @@ describe("sanitize", () => {
 		expect(result.fixes).toEqual([]);
 	});
 
-	it("removes emoji characters", () => {
+	it("preserves emoji characters", () => {
 		const input = "graph TD\n  A[Hello 😀 World 🚀] --> B";
 		const result = sanitize(input);
-		expect(result.code).not.toMatch(/😀/u);
-		expect(result.code).not.toMatch(/🚀/u);
-		expect(result.fixes).toContain("emoji removed");
+		expect(result.code).toMatch(/😀/u);
+		expect(result.code).toMatch(/🚀/u);
+		expect(result.fixes).toEqual([]);
 	});
 
-	it("collapses multiple spaces after emoji removal", () => {
-		const input = "graph TD\n  A😀  B😀   C";
+	it("preserves emoji in rhombus labels with special chars (emoji stays, label quoted)", () => {
+		const input = "A{done? ✅}";
 		const result = sanitize(input);
-		expect(result.code).not.toMatch(/  +/);
+		expect(result.code).toContain('A{"done? ✅"}');
+		expect(result.code).toMatch(/✅/u);
 	});
 
 	it("wraps subgraph labels containing special characters in quotes", () => {
@@ -171,6 +172,115 @@ describe("sanitize", () => {
 		const input = "graph TD\n  A[Normal Label] --> B[Another]";
 		const result = sanitize(input);
 		expect(result.code).toBe(input);
+	});
+
+	// --- rhombus / decision nodes (the original failing case) ---
+
+	it("wraps rhombus labels containing '?' and HTML tags", () => {
+		const input = "flowchart TD\n  B{依赖框架注解?<br/>@Transactional}";
+		const result = sanitize(input);
+		expect(result.code).toContain('B{"依赖框架注解?<br/>@Transactional"}');
+		expect(result.fixes).toContain('node B → {"依赖框架注解?<br/>@Transactional"}');
+	});
+
+	it("wraps rhombus labels with '@' and '/' separators", () => {
+		const input = "A{a@b/c}";
+		const result = sanitize(input);
+		expect(result.code).toContain('A{"a@b/c"}');
+	});
+
+	it("does not modify rhombus labels without special characters", () => {
+		const input = "A{是}";
+		const result = sanitize(input);
+		expect(result.code).toBe(input);
+		expect(result.fixes).toEqual([]);
+	});
+
+	it("skips already-quoted rhombus labels", () => {
+		const input = 'A{"already (quoted)"}';
+		const result = sanitize(input);
+		expect(result.code).toBe(input);
+		expect(result.fixes).toEqual([]);
+	});
+
+	// --- other shapes ---
+
+	it("wraps rounded node labels with special characters", () => {
+		const input = "A(是?)";
+		const result = sanitize(input);
+		expect(result.code).toContain('A("是?")');
+	});
+
+	it("wraps circle node labels with special characters", () => {
+		const input = "A((a@b))";
+		const result = sanitize(input);
+		expect(result.code).toContain('A(("a@b"))');
+	});
+
+	it("wraps hexagon node labels with special characters", () => {
+		const input = "A{{x?y}}";
+		const result = sanitize(input);
+		expect(result.code).toContain('A{{"x?y"}}');
+	});
+
+	it("wraps subroutine node labels with special characters", () => {
+		const input = "A[[a<b]]";
+		const result = sanitize(input);
+		expect(result.code).toContain('A[["a<b"]]');
+	});
+
+	it("wraps cylinder node labels with special characters", () => {
+		const input = "A[(a@b)]";
+		const result = sanitize(input);
+		expect(result.code).toContain('A[("a@b")]');
+	});
+
+	it("wraps parallelogram node labels with special characters", () => {
+		const input = "A[/a?b/]";
+		const result = sanitize(input);
+		expect(result.code).toContain('A[/"a?b"/]');
+	});
+
+	it("matches circle shape before rounded (greedy order)", () => {
+		// A((x?)) must be treated as a circle, not as a rounded node
+		// A( whose label happens to start with (x?
+		const input = "A((x?))";
+		const result = sanitize(input);
+		expect(result.code).toBe('A(("x?"))');
+	});
+
+	it("wraps rectangle labels containing '?' or '@' (extended trigger set)", () => {
+		const input = "A[what?] --> B[foo@bar]";
+		const result = sanitize(input);
+		expect(result.code).toContain('A["what?"]');
+		expect(result.code).toContain('B["foo@bar"]');
+	});
+
+	it("sanitizes the full real-world decision-tree diagram", () => {
+		const input = [
+			"flowchart TD",
+			"  A[被测代码] --> B{依赖框架注解?<br/>@Transactional/@DS/AOP}",
+			"  B -->|是| IT[需要集成测试]",
+			"  B -->|否| C{执行真实外部 IO?<br/>SQL/Redis/MQ/HTTP}",
+			"  C -->|是| IT",
+			"  C -->|否| D{涉及多线程<br/>共享状态?}",
+			"  D -->|是| IT",
+			"  D -->|否| E{跨多个组件<br/>协议契约?}",
+			"  E -->|是| IT",
+			"  E -->|否| MOCK[Mock 单测足够]",
+		].join("\n");
+		const result = sanitize(input);
+		// All rhombus nodes get quoted
+		expect(result.code).toContain('B{"依赖框架注解?<br/>@Transactional/@DS/AOP"}');
+		expect(result.code).toContain('C{"执行真实外部 IO?<br/>SQL/Redis/MQ/HTTP"}');
+		expect(result.code).toContain('D{"涉及多线程<br/>共享状态?"}');
+		expect(result.code).toContain('E{"跨多个组件<br/>协议契约?"}');
+		// Rectangles without special chars are untouched
+		expect(result.code).toContain("A[被测代码]");
+		expect(result.code).toContain("IT[需要集成测试]");
+		expect(result.code).toContain("MOCK[Mock 单测足够]");
+		// Edge labels are untouched
+		expect(result.code).toContain("B -->|是| IT");
 	});
 
 	it("returns empty string unchanged", () => {
@@ -626,5 +736,29 @@ describe("renderHtml — PNG export", () => {
 		expect(h).toContain("exportSvg");
 		expect(h).toContain("image/svg+xml");
 		expect(h).toContain(".svg");
+	});
+});
+
+// ============================================================================
+// HTML structure assertions — export strips emoji, display keeps them (task)
+// ============================================================================
+
+describe("renderHtml — export strips emoji while display keeps them", () => {
+	it("defines an emoji regex constant for export", () => {
+		const h = renderHtml([], "dark");
+		expect(h).toMatch(/EMOJI_RE/);
+		expect(h).toMatch(/Emoji_Presentation/);
+	});
+
+	it("exportSvg strips emoji after serialization", () => {
+		const h = renderHtml([], "dark");
+		const svgFn = h.slice(h.indexOf("window.exportSvg"), h.indexOf("window.exportPng"));
+		expect(svgFn).toMatch(/serializeToString\(clone\)\.replace\(EMOJI_RE/);
+	});
+
+	it("exportPng strips emoji after serialization", () => {
+		const h = renderHtml([], "dark");
+		const pngFn = h.slice(h.indexOf("window.exportPng"));
+		expect(pngFn).toMatch(/serializeToString\(svgEl\)\.replace\(EMOJI_RE/);
 	});
 });

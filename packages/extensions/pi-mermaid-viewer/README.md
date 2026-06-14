@@ -25,5 +25,6 @@ Run `/mermaid` to collect all ````mermaid` code blocks from the conversation and
 - **2x PNG export** for sharing
 - **Split view** to inspect source alongside rendered diagram
 - **Multi-diagram navigation** when the conversation contains multiple blocks
-- **Auto-sanitization** of emoji and special characters that Mermaid cannot render
+- **Emoji support** — emoji render natively via the browser's color font
+- **Auto-quoting** of node labels with special characters (`?`, `@`, `<br/>`, `/`, etc.) that Mermaid cannot parse
 - Opens immediately in your default browser — no local server required
