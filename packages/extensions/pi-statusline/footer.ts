@@ -36,6 +36,20 @@ export function formatCountdown(resetAt: number): string {
 	return `${m}m`;
 }
 
+/** Format countdown with day precision for weekly cycles. */
+export function formatWeeklyCountdown(resetAt: number): string {
+	if (!resetAt) return "?";
+	const remainingMs = resetAt - Date.now();
+	if (remainingMs <= 0) return "0h";
+	const totalMin = Math.floor(remainingMs / 60000);
+	const d = Math.floor(totalMin / 1440);
+	const h = Math.floor((totalMin % 1440) / 60);
+	if (d > 0) return `${d}d${h}h`;
+	const m = totalMin % 60;
+	if (h > 0) return `${h}h${m}m`;
+	return `${m}m`;
+}
+
 export function formatCwd(cwd: string): string {
 	const home = process.env.HOME || process.env.USERPROFILE;
 	if (!home) return cwd;
@@ -65,15 +79,23 @@ export function buildStatLine(
 ): string {
 	const mods: string[] = [];
 
-	// token flow: in 29k, out 22k, cache 515k, total 566k
+	// tokens 566k(in 29k, out 22k, cache 515k,45.2%)
 	{
 		const tok: string[] = [];
 		if (stats.input) tok.push(`in ${fmt(stats.input)}`);
 		if (stats.output) tok.push(`out ${fmt(stats.output)}`);
 		const cache = stats.cacheRead + stats.cacheWrite;
-		if (cache) tok.push(`cache ${fmt(cache)}`);
-		if (stats.total) tok.push(`total ${fmt(stats.total)}`);
-		if (tok.length) mods.push(tok.join(", "));
+		if (cache) {
+			const cacheStr = stats.hitRate > 0
+				? `cache ${fmt(cache)},${(stats.hitRate * 100).toFixed(1)}%`
+				: `cache ${fmt(cache)}`;
+			tok.push(cacheStr);
+		}
+		if (tok.length > 0 && stats.total) {
+			mods.push(`tokens ${fmt(stats.total)}(${tok.join(", ")})`);
+		} else if (tok.length > 0) {
+			mods.push(tok.join(", "));
+		}
 	}
 
 	// Provider-specific cost/usage

@@ -29,7 +29,9 @@
     "footer"
   ],
   "files": [
-    "index.ts",
+    "*.ts",
+    "providers/*.ts",
+    "quota/*.ts",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

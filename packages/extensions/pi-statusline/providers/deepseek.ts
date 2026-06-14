@@ -71,4 +71,11 @@ export class DeepSeekUsageProvider implements UsageProvider {
 
 		return parts.join(" · ");
 	}
+
+	debugDump(result: NonNullable<ProviderUsageResult>, w: (s: string) => void): void {
+		if (result.provider !== "deepseek") return;
+		const ds = result as DeepSeekResult;
+		w(`  balance: ${ds.currency} ${ds.totalBalance}`);
+		w(`  weeklyTokens: ${ds.weeklyTokens}`);
+	}
 }

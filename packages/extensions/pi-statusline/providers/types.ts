@@ -8,5 +8,6 @@ export interface UsageProvider {
 		model: ExtensionContext["model"],
 	): Promise<ProviderUsageResult>;
 	formatForFooter(result: NonNullable<ProviderUsageResult>, sessionCost: number, currency: string): string;
+	debugDump(result: NonNullable<ProviderUsageResult>, w: (s: string) => void): void;
 	quotaCalculator: QuotaCalculator;
 }

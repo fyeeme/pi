@@ -13,6 +13,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 let usageCache: CacheEntry | null = null;
 
+export function resetUsageCache(): void {
+	usageCache = null;
+}
+
 export function getUsageCache(): CacheEntry | null {
 	return usageCache;
 }
@@ -36,6 +40,11 @@ export async function refreshUsage(
 		usageCache = null;
 	}
 	return result;
+}
+
+export function getUsageCacheAge(): number | null {
+	if (!usageCache) return null;
+	return Date.now() - usageCache.fetchedAt;
 }
 
 export function getCachedUsage(

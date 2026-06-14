@@ -3,7 +3,7 @@ import type { ZaiResult, ProviderUsageResult } from "../types.ts";
 import type { UsageProvider } from "./types.ts";
 import type { QuotaCalculator } from "../quota/types.ts";
 import { ZaiQuotaCalculator } from "../quota/zai.ts";
-import { fmt, formatCountdown } from "../footer.ts";
+import { fmt, formatCountdown, formatWeeklyCountdown } from "../footer.ts";
 import { scanWeeklyTokens } from "../session-scanner.ts";
 
 /** Check if the provider name is a ZAI/GLM variant. */
@@ -117,11 +117,23 @@ export class ZaiUsageProvider implements UsageProvider {
 				parts.push(`7d:${fmt(zai.weeklyTokens)}`);
 			}
 		} else if (zai.weeklyTokens > 0 || zai.weeklyPct > 0) {
-			const weeklyCountdown = formatCountdown(zai.weeklyResetAt);
+			const weeklyCountdown = formatWeeklyCountdown(zai.weeklyResetAt);
 			parts.push(`W:${zai.weeklyPct}%(${fmt(zai.weeklyTokens)},${weeklyCountdown})`);
 		}
 
 		return parts.join(" · ");
+	}
+
+	debugDump(result: NonNullable<ProviderUsageResult>, w: (s: string) => void): void {
+		if (result.provider !== "zai") return;
+		const zai = result as ZaiResult;
+		w(`  tokensLimitPct: ${zai.tokensLimitPct}%`);
+		w(`  tokensResetAt: ${new Date(zai.tokensResetAt).toISOString()}`);
+		w(`  level: ${zai.level}`);
+		w(`  weeklyTokens: ${zai.weeklyTokens}`);
+		w(`  weeklyPct: ${zai.weeklyPct}%`);
+		w(`  isNaturalWeek: ${zai.isNaturalWeek}`);
+		w(`  weeklyResetAt: ${zai.weeklyResetAt ? new Date(zai.weeklyResetAt).toISOString() : "?"}`);
 	}
 
 	/** Fetch model-usage for a time range. Returns total tokens. */
