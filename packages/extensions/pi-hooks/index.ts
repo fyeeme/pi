@@ -56,7 +56,7 @@ interface HookOutput {
 // Glob matching
 // ============================================================================
 
-function globMatch(pattern: string, value: string): boolean {
+export function globMatch(pattern: string, value: string): boolean {
 	if (pattern === "") return true;
 	const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 	const regexStr = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
@@ -67,7 +67,7 @@ function globMatch(pattern: string, value: string): boolean {
 // Config loader - cached per session via ??=
 // ============================================================================
 
-function loadConfig(cwd: string): HooksConfig | null {
+export function loadConfig(cwd: string): HooksConfig | null {
 	const envPath = process.env.PI_HOOKS_CONFIG;
 	const candidates = envPath
 		? [envPath]
@@ -234,15 +234,19 @@ export default function (pi: ExtensionAPI): void {
 		const lastUserIdx = messages.findLastIndex((m) => (m as { role: string }).role === "user");
 
 		if (lastUserIdx >= 0) {
-			const last = messages[lastUserIdx] as {
+			// Append to the last user message's content array. pi-hooks operates on
+			// messages structurally (any role:"user" message whose content is an
+			// array); it does not depend on a specific message variant type, so we
+			// bridge through `unknown` rather than asserting an incompatible shape.
+			const last = messages[lastUserIdx] as unknown as {
 				role: string;
-				content: { type: string; [k: string]: unknown }[];
+				content: unknown[];
 			};
 			if (Array.isArray(last.content)) {
 				messages[lastUserIdx] = {
 					...last,
 					content: [...last.content, { type: "text" as const, text }],
-				} as typeof messages[number];
+				} as unknown as (typeof messages)[number];
 			}
 		} else {
 			(messages as unknown[]).push({ role: "user", content: [{ type: "text" as const, text }] });
