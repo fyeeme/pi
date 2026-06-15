@@ -37,6 +37,7 @@
     ]
   },
   "scripts": {
+    "test": "vitest --run",
     "typecheck": "tsc"
   },
   "peerDependencies": {

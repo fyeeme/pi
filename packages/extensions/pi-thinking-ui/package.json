@@ -31,6 +31,7 @@
     "render.ts",
     "state.ts",
     "types.ts",
+    "README.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
@@ -40,6 +41,7 @@
     ]
   },
   "scripts": {
+    "test": "vitest --run",
     "typecheck": "tsc"
   },
   "peerDependencies": {
