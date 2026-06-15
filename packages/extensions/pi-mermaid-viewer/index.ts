@@ -18,7 +18,6 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 export interface DiagramData {
   code: string;
-  fixes: string[];
   label: string;
 }
 
@@ -28,63 +27,78 @@ export interface MermaidBlock {
 }
 
 // ============================================================================
-// Mermaid sanitizer
+// Bare-label healer (runs only after Mermaid fails to parse)
 // ============================================================================
 
-export function sanitize(raw: string): { code: string; fixes: string[] } {
+// Authored with full TS annotations — at runtime tsx/esbuild strips them, so
+// Function.prototype.toString() yields annotation-free browser-valid JS for
+// injection into the rendered page. Invoked only when the original source
+// fails to parse, so correctly-quoted source is NEVER rewritten. The earlier
+// "sanitize everything up front" design corrupted valid input (e.g. it
+// re-wrapped an already-correct `subgraph L1["…()"]`, producing double
+// quotes and a guaranteed parse error). Try-first makes that class of bug
+// structurally impossible.
+export function quoteBareLabels(code: string): { code: string; fixes: string[] } {
   const fixes: string[] = [];
-  let code = raw;
+  const SPECIAL = /[?@<>\/&#!(){}\[\]]/;
+  const SHAPES = [
+    { o: "(((", c: ")))" },
+    { o: "((", c: "))" },
+    { o: "{{", c: "}}" },
+    { o: "[[", c: "]]" },
+    { o: "[(", c: ")]" },
+    { o: "[/", c: "/]" },
+    { o: "{", c: "}" },
+    { o: "(", c: ")" },
+    { o: "[", c: "]" },
+  ];
+  // One alternation per node; longer wrappers first so ((...)) beats (...).
+  const SHAPE_RE = /(\w+)(?:\(\(\(([^)]*)\)\)\)|\(\(([^)]*)\)\)|\{\{([^}]*)\}\}|\[\[([^\]]*)\]\]|\[\(([^)]*)\)\]|\[\/([^/]*)\/\]|\{([^}]*)\}|\(([^)]*)\)|\[([^\]]*)\])/g;
 
-  // Wrap subgraph labels with special characters in quotes
-  let sgCounter = 0;
-  code = code
-    .split("\n")
-    .map((line) => {
-      const m = line.match(/^(\s*subgraph\s+)(.+)$/);
-      if (!m) return line;
-      let label = m[2].trim();
-      if (label.startsWith("[") || label.startsWith('"')) return line;
-      if (/[(){}<>]/.test(label)) {
-        sgCounter += 1;
-        fixes.push(`subgraph → sg${sgCounter} ["${label}"]`);
-        return `${m[1]}sg${sgCounter} ["${label}"]`;
+  const fixed = code.split("\n").map((line) => {
+    // Subgraph: only heal a genuinely BARE label. Skip the canonical
+    // `ID[...]` form, quoted forms, and bracket forms — all already safe.
+    const sm = line.match(/^(\s*subgraph\s+)(.+)$/);
+    if (sm) {
+      const slabel = sm[2].trim();
+      if (slabel.charAt(0) === '"' || slabel.charAt(0) === "[" || /^\w+\s*\[/.test(slabel)) return line;
+      if (SPECIAL.test(slabel)) {
+        fixes.push("subgraph " + slabel);
+        return sm[1] + "sg" + fixes.length + ' ["' + slabel + '"]';
       }
       return line;
-    })
-    .join("\n");
+    }
+    // Nodes: quote bare labels containing special chars. Labels that are
+    // already double-quoted are left untouched (defence in depth — though
+    // this path only runs after a parse failure anyway).
+    return line.replace(SHAPE_RE, (match, id, ...groups) => {
+      const idx = groups.findIndex((g) => g !== undefined);
+      if (idx < 0) return match;
+      const shape = SHAPES[idx];
+      const label = String(groups[idx]);
+      const trimmed = label.trim();
+      if (trimmed.charAt(0) === '"' && trimmed.slice(-1) === '"') return match;
+      if (!SPECIAL.test(label)) return match;
+      fixes.push(id + " " + shape.o + "…" + shape.c);
+      const clean = label.replace(/^"+|"+$/g, "").trim();
+      return id + shape.o + '"' + clean + '"' + shape.c;
+    });
+  }).join("\n");
 
-  // Wrap node labels containing special characters in double quotes.
-  // One alternation pass per node so a cylinder A[(x)] is not re-matched
-  // by the rectangle rule. Longer wrappers come first so ((...)) wins
-  // over (...), [[...]] over [...].
-  const SPECIAL = /[?@<>\/&#!(){}\[\]]/;
-  const SHAPE_RE = /(\w+)(?:\(\(\(([^)]*)\)\)\)|\(\(([^)]*)\)\)|\{\{([^}]*)\}\}|\[\[([^\]]*)\]\]|\[\(([^)]*)\)\]|\[\/([^/]*)\/\]|\{([^}]*)\}|\(([^)]*)\)|\[([^\]]*)\])/g;
-  const SHAPES: ReadonlyArray<{ open: string; close: string }> = [
-    { open: "(((", close: ")))" },
-    { open: "((", close: "))" },
-    { open: "{{", close: "}}" },
-    { open: "[[", close: "]]" },
-    { open: "[(", close: ")]" },
-    { open: "[/", close: "/]" },
-    { open: "{", close: "}" },
-    { open: "(", close: ")" },
-    { open: "[", close: "]" },
-  ];
-  code = code.replace(SHAPE_RE, (match, id: string, ...rest: Array<string | number>) => {
-    const idx = SHAPES.findIndex((_s, i) => rest[i] !== undefined);
-    if (idx < 0) return match;
-    const shape = SHAPES[idx];
-    const label = String(rest[idx]);
-    const trimmed = label.trim();
-    if (trimmed.startsWith('\"') && trimmed.endsWith('\"')) return match;
-    if (!SPECIAL.test(label)) return match;
-    const clean = label.replace(/^"+|"+$/g, "").trim();
-    fixes.push(`node ${id} → ${shape.open}"${clean}"${shape.close}`);
-    return `${id}${shape.open}"${clean}"${shape.close}`;
-  });
-
-  return { code, fixes };
+  return { code: fixed, fixes };
 }
+
+// ============================================================================
+// Emoji regex source (authored at module scope to survive template literals)
+// ============================================================================
+// Like quoteBareLabels, this is authored outside the renderHtml template
+// literal because template literals EAT backslashes: inlined as
+// /[\p{Emoji_Presentation}...]/gu it would be corrupted to /[p{Emoji...}]/gu,
+// which (as a character class) matches the letters p, E, m, o, j, i... and
+// strips ~45% of every exported SVG — breaking PNG export (Image fails to
+// load the corrupted SVG, so img.onload never fires). We inject the regex
+// SOURCE string into the template and build the RegExp at runtime.
+const EMOJI_RE_SRC = "[\\\\p{Emoji_Presentation}\\\\p{Extended_Pictographic}\\\\u{FE0F}\\\\u{200D}]";
 
 // ============================================================================
 // System theme detection (macOS only)
@@ -233,7 +247,7 @@ let activeIdx = 0;
 const bgClass = { dark: "bg-dark", light: "bg-light", white: "bg-white" };
 const bgFill  = { dark: "#0d1117", light: "#f6f8fa", white: "#ffffff" };
 const themeMap = { dark: "dark", light: "default", white: "base" };
-const EMOJI_RE = /[\p{Emoji_Presentation}\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu;
+const EMOJI_RE = new RegExp("${EMOJI_RE_SRC}", "gu");
 
 document.getElementById("bgsel").value = INIT_BG;
 
@@ -263,12 +277,18 @@ function switchTab(idx) {
   document.getElementById("srcLabel").textContent = "SOURCE #" + (idx + 1);
 }
 
+${quoteBareLabels.toString()}
+
 async function render(theme) {
   const d = DIAGRAMS[activeIdx];
   document.getElementById("ld").style.display = "block";
   document.getElementById("svg").innerHTML = "";
   document.getElementById("fx").style.display = "none";
   document.getElementById("er").style.display = "none";
+
+  // Try-first: render the user's source verbatim. Only if Mermaid rejects it
+  // do we run quoteBareLabels() and retry once. Valid source is never rewritten.
+  let svg = null, fixes = null, err = null;
   try {
     if (!mermaidLib) {
       mermaidLib = (await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")).default;
@@ -276,8 +296,25 @@ async function render(theme) {
     mermaidLib.initialize({startOnLoad:false,theme:theme,securityLevel:"loose",
       themeVariables: theme === "dark" ? {} : { fontSize:"14px", fontFamily:"-apple-system,sans-serif" },
       flowchart:{useMaxWidth:true,htmlLabels:true,curve:"basis"}});
-    const {svg} = await mermaidLib.render("r" + Date.now(), d.code);
-    document.getElementById("ld").style.display = "none";
+    try {
+      svg = (await mermaidLib.render("m" + Date.now(), d.code)).svg;
+    } catch (e1) {
+      const healed = quoteBareLabels(d.code);
+      if (!healed.fixes.length) throw e1;          // nothing to heal → surface original error
+      svg = (await mermaidLib.render("m" + Date.now() + "f", healed.code)).svg;
+      d.code = healed.code;                         // surface healed source in split view / copy
+      fixes = healed.fixes;
+    }
+  } catch (e) {
+    err = e;
+  }
+
+  document.getElementById("ld").style.display = "none";
+  if (err) {
+    const el = document.getElementById("er");
+    el.textContent = err.message; el.style.display = "block";
+    document.getElementById("title").textContent = "Error";
+  } else {
     document.getElementById("svg").innerHTML = svg;
     document.getElementById("title").textContent = d.label;
 
@@ -291,20 +328,12 @@ async function render(theme) {
       wrap.style.width = svgNaturalW + "px";
       wrap.style.maxWidth = "";
     }
-    document.getElementById("er").style.display = "none";
 
     const fxEl = document.getElementById("fx");
-    if (d.fixes.length) {
-      fxEl.innerHTML = "<strong>Sanitized:</strong> " + d.fixes.map(f => f.replace(/&/g,"&amp;").replace(/</g,"&lt;")).join(" &middot; ");
+    if (fixes && fixes.length) {
+      fxEl.innerHTML = "<strong>Auto-fixed:</strong> " + fixes.map(f => f.replace(/&/g,"&amp;").replace(/</g,"&lt;")).join(" &middot; ");
       fxEl.style.display = "block";
-    } else {
-      fxEl.style.display = "none";
     }
-  } catch(e) {
-    document.getElementById("ld").style.display = "none";
-    const el = document.getElementById("er");
-    el.textContent = e.message; el.style.display = "block";
-    document.getElementById("title").textContent = "Error";
   }
   document.getElementById("src").textContent = d.code;
 }
@@ -542,10 +571,10 @@ export default function (pi: ExtensionAPI): void {
 
       labelBlocks(blocks);
 
-      const diagrams: DiagramData[] = blocks.map((b) => {
-        const { code, fixes } = sanitize(b.raw);
-        return { code, fixes, label: b.label };
-      });
+      const diagrams: DiagramData[] = blocks.map((b) => ({
+        code: b.raw,
+        label: b.label,
+      }));
 
       const theme = detectSystemTheme();
       const html = renderHtml(diagrams, theme);

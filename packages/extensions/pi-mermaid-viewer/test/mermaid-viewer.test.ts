@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sanitize, renderHtml, extractMermaidBlocks, labelBlocks } from "../index.ts";
+import { quoteBareLabels, renderHtml, extractMermaidBlocks, labelBlocks } from "../index.ts";
 import type { DiagramData, MermaidBlock } from "../index.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // ============================================================================
 // Helpers
@@ -65,20 +69,20 @@ function mockCtx(entries: Array<{ type: string; message?: unknown }>): Extension
 }
 
 // ============================================================================
-// sanitize
+// quoteBareLabels
 // ============================================================================
 
-describe("sanitize", () => {
+describe("quoteBareLabels", () => {
 	it("returns unchanged code for clean input", () => {
 		const input = `graph TD\n  A --> B`;
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toBe(input);
 		expect(result.fixes).toEqual([]);
 	});
 
 	it("preserves emoji characters", () => {
 		const input = "graph TD\n  A[Hello 😀 World 🚀] --> B";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toMatch(/😀/u);
 		expect(result.code).toMatch(/🚀/u);
 		expect(result.fixes).toEqual([]);
@@ -86,7 +90,7 @@ describe("sanitize", () => {
 
 	it("preserves emoji in rhombus labels with special chars (emoji stays, label quoted)", () => {
 		const input = "A{done? ✅}";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A{"done? ✅"}');
 		expect(result.code).toMatch(/✅/u);
 	});
@@ -96,9 +100,9 @@ describe("sanitize", () => {
   subgraph Group (A)
     A --> B
   end`;
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('sg1 ["Group (A)"]');
-		expect(result.fixes).toContain('subgraph → sg1 ["Group (A)"]');
+		expect(result.fixes).toContain('subgraph Group (A)');
 	});
 
 	it("wraps subgraph labels with curly braces", () => {
@@ -106,26 +110,26 @@ describe("sanitize", () => {
   subgraph Items {x, y}
     A --> B
   end`;
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('sg1 ["Items {x, y}"]');
 	});
 
 	it("wraps subgraph labels with angle brackets", () => {
 		const input = "graph TD\n  subgraph Conditional <x>\n    A --> B\n  end";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('sg1 ["Conditional <x>"]');
 	});
 
 	it("does not wrap subgraph labels that already have brackets or quotes", () => {
 		const input = 'graph TD\n  subgraph [Already Safe]\n    A --> B\n  end';
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toBe(input);
 		expect(result.fixes).toEqual([]);
 	});
 
 	it("does not wrap subgraph labels that start with double quotes", () => {
 		const input = 'graph TD\n  subgraph "Already Quoted"\n    A --> B\n  end';
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toBe(input);
 	});
 
@@ -137,40 +141,40 @@ describe("sanitize", () => {
   subgraph Second {Group}
     C --> D
   end`;
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('sg1 ["First (Group)"]');
 		expect(result.code).toContain('sg2 ["Second {Group}"]');
 	});
 
 	it("wraps node labels containing special characters in double quotes", () => {
 		const input = "graph TD\n  A[Node (with parens)] --> B";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A["Node (with parens)"]');
-		expect(result.fixes).toContain('node A → ["Node (with parens)"]');
+		expect(result.fixes).toContain('A […]');
 	});
 
 	it("wraps node labels with nested brackets", () => {
 		const input = "graph TD\n  A[Value: {key}] --> B";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A["Value: {key}"]');
 	});
 
 	it("handles multiple node fixes in the same line", () => {
 		const input = "A[Hello (world)] --> B[Goodbye {everyone}]";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A["Hello (world)"]');
 		expect(result.code).toContain('B["Goodbye {everyone}"]');
 	});
 
 	it("strips existing double quotes from node labels before rewrapping", () => {
 		const input = 'A["Already (quoted)"] --> B';
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A["Already (quoted)"]');
 	});
 
 	it("does not modify node labels without special characters", () => {
 		const input = "graph TD\n  A[Normal Label] --> B[Another]";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toBe(input);
 	});
 
@@ -178,27 +182,27 @@ describe("sanitize", () => {
 
 	it("wraps rhombus labels containing '?' and HTML tags", () => {
 		const input = "flowchart TD\n  B{依赖框架注解?<br/>@Transactional}";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('B{"依赖框架注解?<br/>@Transactional"}');
-		expect(result.fixes).toContain('node B → {"依赖框架注解?<br/>@Transactional"}');
+		expect(result.fixes).toContain('B {…}');
 	});
 
 	it("wraps rhombus labels with '@' and '/' separators", () => {
 		const input = "A{a@b/c}";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A{"a@b/c"}');
 	});
 
 	it("does not modify rhombus labels without special characters", () => {
 		const input = "A{是}";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toBe(input);
 		expect(result.fixes).toEqual([]);
 	});
 
 	it("skips already-quoted rhombus labels", () => {
 		const input = 'A{"already (quoted)"}';
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toBe(input);
 		expect(result.fixes).toEqual([]);
 	});
@@ -207,37 +211,37 @@ describe("sanitize", () => {
 
 	it("wraps rounded node labels with special characters", () => {
 		const input = "A(是?)";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A("是?")');
 	});
 
 	it("wraps circle node labels with special characters", () => {
 		const input = "A((a@b))";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A(("a@b"))');
 	});
 
 	it("wraps hexagon node labels with special characters", () => {
 		const input = "A{{x?y}}";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A{{"x?y"}}');
 	});
 
 	it("wraps subroutine node labels with special characters", () => {
 		const input = "A[[a<b]]";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A[["a<b"]]');
 	});
 
 	it("wraps cylinder node labels with special characters", () => {
 		const input = "A[(a@b)]";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A[("a@b")]');
 	});
 
 	it("wraps parallelogram node labels with special characters", () => {
 		const input = "A[/a?b/]";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A[/"a?b"/]');
 	});
 
@@ -245,18 +249,18 @@ describe("sanitize", () => {
 		// A((x?)) must be treated as a circle, not as a rounded node
 		// A( whose label happens to start with (x?
 		const input = "A((x?))";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toBe('A(("x?"))');
 	});
 
 	it("wraps rectangle labels containing '?' or '@' (extended trigger set)", () => {
 		const input = "A[what?] --> B[foo@bar]";
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		expect(result.code).toContain('A["what?"]');
 		expect(result.code).toContain('B["foo@bar"]');
 	});
 
-	it("sanitizes the full real-world decision-tree diagram", () => {
+	it("heals the full real-world decision-tree diagram", () => {
 		const input = [
 			"flowchart TD",
 			"  A[被测代码] --> B{依赖框架注解?<br/>@Transactional/@DS/AOP}",
@@ -269,7 +273,7 @@ describe("sanitize", () => {
 			"  E -->|是| IT",
 			"  E -->|否| MOCK[Mock 单测足够]",
 		].join("\n");
-		const result = sanitize(input);
+		const result = quoteBareLabels(input);
 		// All rhombus nodes get quoted
 		expect(result.code).toContain('B{"依赖框架注解?<br/>@Transactional/@DS/AOP"}');
 		expect(result.code).toContain('C{"执行真实外部 IO?<br/>SQL/Redis/MQ/HTTP"}');
@@ -284,8 +288,24 @@ describe("sanitize", () => {
 	});
 
 	it("returns empty string unchanged", () => {
-		const result = sanitize("");
+		const result = quoteBareLabels("");
 		expect(result.code).toBe("");
+		expect(result.fixes).toEqual([]);
+	});
+
+	// --- regression: the bug that triggered the try-first redesign ---
+
+	it("does NOT re-wrap the canonical `subgraph ID[\"..()..\"]` form (the original parse-error bug)", () => {
+		const input = 'subgraph L1["Layer 1: RunDataEndListenerV2.processRunDataEnd()"]';
+		const result = quoteBareLabels(input);
+		expect(result.code).toBe(input);
+		expect(result.fixes).toEqual([]);
+	});
+
+	it("does NOT re-wrap an already-quoted node label containing parens", () => {
+		const input = 'A5["dealRunEndActivity()"]';
+		const result = quoteBareLabels(input);
+		expect(result.code).toBe(input);
 		expect(result.fixes).toEqual([]);
 	});
 });
@@ -297,7 +317,7 @@ describe("sanitize", () => {
 describe("renderHtml", () => {
 	it("embeds diagram data as JSON in the script tag", () => {
 		const diagrams: DiagramData[] = [
-			{ code: "graph TD\n  A --> B", fixes: [], label: "Diagram 1" },
+			{ code: "graph TD\n  A --> B", label: "Diagram 1" },
 		];
 		const html = renderHtml(diagrams, "dark");
 		expect(html).toContain('"code":"graph TD\\n  A --> B"');
@@ -330,7 +350,7 @@ describe("renderHtml", () => {
 
 	it("produces valid HTML structure with all key elements", () => {
 		const diagrams: DiagramData[] = [
-			{ code: "A --> B", fixes: ["emoji removed"], label: "Test" },
+			{ code: "A --> B", label: "Test" },
 		];
 		const html = renderHtml(diagrams, "dark");
 
@@ -362,7 +382,7 @@ describe("renderHtml", () => {
 
 	it("does not create tabs when only one diagram", () => {
 		const diagrams: DiagramData[] = [
-			{ code: "A --> B", fixes: [], label: "Only" },
+			{ code: "A --> B", label: "Only" },
 		];
 		const html = renderHtml(diagrams, "dark");
 		// No tab creation logic for single diagram
@@ -372,8 +392,8 @@ describe("renderHtml", () => {
 
 	it("embeds multiple diagrams correctly", () => {
 		const diagrams: DiagramData[] = [
-			{ code: "A --> B", fixes: [], label: "#1" },
-			{ code: "C --> D", fixes: ["emoji removed"], label: "#2" },
+			{ code: "A --> B", label: "#1" },
+			{ code: "C --> D", label: "#2" },
 		];
 		const html = renderHtml(diagrams, "dark");
 		expect(html).toContain('"code":"A --> B"');
@@ -382,12 +402,15 @@ describe("renderHtml", () => {
 		expect(html).toContain('"label":"#2"');
 	});
 
-	it("embeds fixes array", () => {
+	it("does NOT embed a fixes field (try-first redesign: fixes are computed in-browser on retry)", () => {
 		const diagrams: DiagramData[] = [
-			{ code: "A --> B", fixes: ["fix1", "fix2"], label: "D" },
+			{ code: "A --> B", label: "D" },
 		];
 		const html = renderHtml(diagrams, "dark");
-		expect(html).toContain('"fixes":["fix1","fix2"]');
+		const payload = html.match(/const DIAGRAMS = (\[.*?\]);/s)?.[1] ?? "";
+		expect(payload).not.toMatch(/"fixes"/);
+		expect(payload).toContain('"code"');
+		expect(payload).toContain('"label"');
 	});
 });
 
@@ -554,7 +577,7 @@ describe("labelBlocks", () => {
 
 describe("renderHtml — canvas layout structure", () => {
 	function html() {
-		return renderHtml([{ code: "A --> B", fixes: [], label: "D" }], "dark");
+		return renderHtml([{ code: "A --> B", label: "D" }], "dark");
 	}
 
 	it("renders toolbar with position:fixed overlay", () => {
@@ -609,7 +632,7 @@ describe("renderHtml — canvas layout structure", () => {
 
 describe("renderHtml — icon controls", () => {
 	function html() {
-		return renderHtml([{ code: "A --> B", fixes: [], label: "D" }], "dark");
+		return renderHtml([{ code: "A --> B", label: "D" }], "dark");
 	}
 
 	it("zoom-out button has SVG child", () => {
@@ -760,5 +783,81 @@ describe("renderHtml — export strips emoji while display keeps them", () => {
 		const h = renderHtml([], "dark");
 		const pngFn = h.slice(h.indexOf("window.exportPng"));
 		expect(pngFn).toMatch(/serializeToString\(svgEl\)\.replace\(EMOJI_RE/);
+	});
+});
+
+// ============================================================================
+// quoteBareLabels.toString() injection invariant — guards the template-backslash gotcha
+// ============================================================================
+// quoteBareLabels is authored at module scope and injected via .toString().
+// Template literals EAT backslashes, so authoring regex-bearing JS inline would
+// corrupt the regexes (\w → w, \s → s). These tests lock the invariant.
+
+describe("quoteBareLabels.toString() survives template-literal injection", () => {
+	it("preserves regex backslashes in the serialized source", () => {
+		const src = quoteBareLabels.toString();
+		expect(src).toContain("\\w");   // lost \w → backslashes corrupted
+		expect(src).toContain("\\s");   // lost \s → backslashes corrupted
+		expect(src).toContain("\\[");   // lost \[ → backslashes corrupted
+	});
+
+	it("serializes to a syntactically valid named function declaration", () => {
+		const src = quoteBareLabels.toString();
+		const file = join(tmpdir(), `qlb-check-${Date.now()}.js`);
+		writeFileSync(file, src);
+		expect(() => execFileSync("node", ["--check", file])).not.toThrow();
+	});
+
+	it("re-evaluates into a function with identical behavior", () => {
+		const src = quoteBareLabels.toString();
+		// eslint-disable-next-line no-eval
+		const reimpl = (0, eval)("(" + src + ")") as typeof quoteBareLabels;
+		const cases = [
+			'subgraph L1["x()"]',
+			"B{注解?}",
+			"subgraph 裸?",
+			"A[plain] --> B[x?]",
+		];
+		for (const c of cases) {
+			expect(reimpl(c)).toEqual(quoteBareLabels(c));
+		}
+	});
+});
+
+// ============================================================================
+// renderHtml integration — generated <script> must be valid browser JS
+// ============================================================================
+
+describe("renderHtml: generated <script> is valid browser JS", () => {
+	function extractScript(html: string): string {
+		const m = html.match(/<script type="module">([\s\S]*?)<\/script>/);
+		if (!m) throw new Error("no module script found in HTML");
+		return m[1];
+	}
+
+	it("passes `node --check` on the full generated script", () => {
+		const html = renderHtml([{ code: "flowchart TD\nA-->B", label: "t" }], "dark");
+		const script = extractScript(html);
+		const file = join(tmpdir(), `mvm-check-${Date.now()}.js`);
+		writeFileSync(file, script);
+		expect(() => execFileSync("node", ["--check", file])).not.toThrow();
+	});
+
+	it("injects quoteBareLabels verbatim into the page", () => {
+		const html = renderHtml([{ code: "flowchart TD\nA-->B", label: "t" }], "dark");
+		expect(html).toContain("function quoteBareLabels(code)");
+	});
+
+	it("contains no stale sanitize() call or d.fixes reference", () => {
+		const html = renderHtml([{ code: "flowchart TD\nA-->B", label: "t" }], "dark");
+		expect(html).not.toMatch(/\bsanitize\s*\(/);
+		expect(html).not.toMatch(/(?<![a-zA-Z])d\.fixes\b/);
+	});
+
+	// --- EMOJI_RE template-backslash regression ---
+	it("EMOJI_RE is built from an injected source string (backslashes survive)", () => {
+		const html = renderHtml([{ code: "flowchart TD\nA-->B", label: "t" }], "dark");
+		expect(html).toContain('new RegExp("[\\\\p{Emoji_Presentation}');
+		expect(html).not.toMatch(/EMOJI_RE = \/\[/);
 	});
 });
