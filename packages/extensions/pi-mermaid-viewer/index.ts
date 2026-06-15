@@ -127,19 +127,57 @@ export function renderHtml(diagrams: DiagramData[], theme: "dark" | "light"): st
 html,body{height:100%}
 body{font-family:-apple-system,sans-serif;color:#c9d1d9;padding:0;transition:background .3s}
 .bg-dark{background:#0d1117} .bg-light{background:#f6f8fa} .bg-white{background:#fff}
+.bg-dark{--surface:rgba(22,27,34,.85);--surface-pop:rgba(22,27,34,.95);--field:rgba(48,54,61,.4);--field-hover:rgba(48,54,61,.8);--border:rgba(48,54,61,.6);--text:#c9d1d9;--text-muted:#8b949e;--accent:#58a6ff;--divider:rgba(255,255,255,.12);--shadow:rgba(0,0,0,.3)}
+.bg-light{--surface:rgba(255,255,255,.85);--surface-pop:rgba(255,255,255,.96);--field:rgba(208,215,222,.4);--field-hover:rgba(208,215,222,.8);--border:rgba(208,215,222,.8);--text:#24292f;--text-muted:#57606a;--accent:#0969da;--divider:rgba(0,0,0,.1);--shadow:rgba(0,0,0,.12)}
+.bg-white{--surface:rgba(255,255,255,.9);--surface-pop:rgba(255,255,255,.98);--field:rgba(0,0,0,.05);--field-hover:rgba(0,0,0,.1);--border:rgba(0,0,0,.12);--text:#24292f;--text-muted:#57606a;--accent:#0969da;--divider:rgba(0,0,0,.1);--shadow:rgba(0,0,0,.1)}
 .bg-dark #canvas-viewport{background-image:radial-gradient(circle,rgba(255,255,255,.06) 1px,transparent 1px)}
 .bg-light #canvas-viewport{background-image:radial-gradient(circle,rgba(0,0,0,.08) 1px,transparent 1px)}
 .bg-white #canvas-viewport{background-image:radial-gradient(circle,rgba(0,0,0,.06) 1px,transparent 1px)}
 .bar{position:fixed;top:16px;right:16px;z-index:99;
-  display:flex;gap:4px;align-items:center;height:32px;flex-wrap:wrap;
-  background:rgba(22,27,34,.85);backdrop-filter:blur(12px);
-  padding:4px 10px;border-radius:10px;border:1px solid rgba(48,54,61,.6);
-  box-shadow:0 2px 12px rgba(0,0,0,.3)}
+  display:flex;gap:8px;align-items:center;height:32px;white-space:nowrap;
+  background:transparent;backdrop-filter:none;padding:0;border:none;box-shadow:none}
+.bar .grp{display:flex;gap:4px;align-items:center;height:32px;
+  background:var(--surface);backdrop-filter:blur(12px);
+  padding:4px 10px;border-radius:10px;border:1px solid var(--border);
+  box-shadow:0 2px 12px var(--shadow)}
 .bar .title{display:none}
 .bar button,.bar select{padding:3px 8px;border:none;border-radius:6px;font-size:11px;font-weight:600;
-  cursor:pointer;color:#c9d1d9;transition:.15s;background:rgba(48,54,61,.4);line-height:1}
-.bar button:hover,.bar select:hover{background:rgba(48,54,61,.8)}
-.bc:hover{background:#e94560!important}.be:hover{background:#238636!important}
+  cursor:pointer;color:var(--text);transition:.15s;background:var(--field);line-height:1;
+  display:inline-flex;align-items:center;gap:4px}
+.bar button:hover,.bar select:hover{background:var(--field-hover)}
+.bar button svg,.bar button img{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.bc:hover{background:#e94560!important}
+/* Generic dropdown trigger (shared by theme + format selectors) */
+.dd{position:relative;display:inline-flex;align-items:stretch;background:var(--field);border-radius:6px}
+.dd-btn{padding:3px 8px;border:none;border-radius:6px;cursor:pointer;color:var(--text);
+  font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:4px;background:transparent;transition:.15s}
+.dd-btn:hover{background:var(--field-hover)}
+.dd-caret{width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s}
+.dd-caret.spin{transform:rotate(180deg)}
+.dd-pop{position:absolute;top:calc(100% + 4px);right:0;z-index:100;min-width:100%;
+  background:var(--surface-pop);backdrop-filter:blur(12px);
+  border:1px solid var(--border);border-radius:8px;padding:4px;
+  box-shadow:0 8px 24px var(--shadow);display:none}
+.dd-pop.open{display:block}
+.dd-pop button{display:flex;width:100%;align-items:center;gap:8px;
+  padding:5px 8px;border-radius:5px;color:var(--text);background:transparent;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
+.dd-pop button:hover{background:var(--field-hover)}
+.dd-pop button.active{color:var(--accent)}
+/* Download split button: main (download) + caret (switch), reusing dd styling.
+   Selector is prefixed with .bar so its specificity ties .bar button and wins
+   by source order (these rules come later), otherwise the universal
+   .bar button{border:none;border-radius:6px} would flatten the half-round
+   corners and erase the divider. */
+.dl-split{display:inline-flex;align-items:stretch;background:var(--field);border-radius:6px}
+.bar .dl-main{padding:3px 8px;border:none;border-radius:6px 0 0 6px;cursor:pointer;color:var(--text);
+  font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:4px;background:transparent;transition:.15s}
+.bar .dl-main:hover{background:var(--field-hover)}
+.dl-main svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.bar .dl-toggle{padding:3px 6px;border:none;border-radius:0 6px 6px 0;border-left:1px solid var(--divider);
+  cursor:pointer;color:var(--text);background:transparent;display:inline-flex;align-items:center;transition:.15s}
+.bar .dl-toggle:hover{background:var(--field-hover)}
+.dl-toggle svg{width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* zoom-bar now lives inside .bar as a .grp; legacy fixed positioning removed */
 .tabs{position:fixed;top:16px;left:16px;right:auto;z-index:98;
   display:flex;gap:4px;align-items:center;height:32px;padding:0;overflow-x:auto;
   max-width:calc(100vw - 320px)}
@@ -178,9 +216,7 @@ body{font-family:-apple-system,sans-serif;color:#c9d1d9;padding:0;transition:bac
   padding:4px 10px;font-size:11px;cursor:pointer}
 .src-header button:hover{background:#484f58}
 .split-toggle{background:#6e40c9!important}.split-toggle:hover{background:#8957e5!important}
-.zoom-bar{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10;
-  display:flex;align-items:center;gap:4px;height:32px;padding:4px 10px;
-  border-radius:10px;
+.zoom-bar{display:flex;align-items:center;gap:4px;height:32px;padding:4px 10px;border-radius:10px;
   background:rgba(22,27,34,.85);backdrop-filter:blur(12px);
   border:1px solid rgba(48,54,61,.6);box-shadow:0 2px 12px rgba(0,0,0,.3)}
 .zoom-bar button{background:transparent;border:none;border-radius:5px;width:24px;height:24px;
@@ -196,15 +232,34 @@ body{font-family:-apple-system,sans-serif;color:#c9d1d9;padding:0;transition:bac
 </style></head><body class="bg-${theme}">
 <div class="bar">
   <span id="title" style="display:none"></span>
-  <select id="bgsel" onchange="setBg(this.value)">
-    <option value="dark">Dark</option>
-    <option value="light">Light</option>
-    <option value="white">White</option>
-  </select>
-  <button onclick="exportSvg()">SVG</button>
-  <button class="be" onclick="exportPng()">PNG</button>
-  <button class="bc" id="cb" onclick="copyCode()">Copy</button>
-  <button class="bs" id="sb" onclick="toggleSrc()">Split</button>
+  <div class="grp" id="zb">
+    <button id="zout" title="Zoom out" aria-label="Zoom out" onclick="zoom(-10)">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/><path d="M8 11h6"/></svg>
+    </button>
+    <span id="zl" aria-live="polite" role="status">100%</span>
+    <button id="zin" title="Zoom in" aria-label="Zoom in" onclick="zoom(10)">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/><path d="M8 11h6"/><path d="M11 8v6"/></svg>
+    </button>
+    <button id="zreset" title="Reset view" aria-label="Reset view" onclick="zoom(0)">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+    </button>
+  </div>
+  <div class="grp">
+    <span class="dd" id="bg_dd">
+      <button class="dd-btn" id="bg_btn" title="Theme" aria-label="Theme" aria-haspopup="true">
+        <span id="bg_label">Dark</span>
+        <svg class="dd-caret" id="bg_caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="dd-pop" id="bg_pop">
+        <button data-bg="dark">Dark</button>
+        <button data-bg="light">Light</button>
+        <button data-bg="white">White</button>
+      </div>
+    </span>
+    <span class="dl-split" id="dl_split" style="position:relative"><button class="dl-main" id="dlm_main" title="Download PNG" aria-label="Download"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span id="dlm_fmt">PNG</span></button><button class="dl-toggle" id="dlm_tgl" title="Switch format" aria-label="Switch format" aria-haspopup="true"><svg class="dd-caret" id="dlm_caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button><div class="dd-pop" id="dlm"><button data-fmt="png"><span>PNG</span></button><button data-fmt="svg"><span>SVG</span></button></div></span>
+    <button class="bc" id="cb" onclick="copyCode()">Copy</button>
+    <button class="bs" id="sb" onclick="toggleSrc()">Split</button>
+  </div>
 </div>
 <div class="tabs" id="tabs"></div>
 <div class="content" id="content">
@@ -220,18 +275,7 @@ body{font-family:-apple-system,sans-serif;color:#c9d1d9;padding:0;transition:bac
       <button onclick="copySrc()">Copy</button>
     </div>
     <div id="src"></div>
-  </div>
-  <div class="zoom-bar" id="zb">
-    <button id="zout" title="Zoom out" aria-label="Zoom out" onclick="zoom(-10)">
-      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/><path d="M8 11h6"/></svg>
-    </button>
-    <span id="zl" aria-live="polite" role="status">100%</span>
-    <button id="zin" title="Zoom in" aria-label="Zoom in" onclick="zoom(10)">
-      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/><path d="M8 11h6"/><path d="M11 8v6"/></svg>
-    </button>
-    <button id="zreset" title="Reset view" aria-label="Reset view" onclick="zoom(0)">
-      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-    </button>
+
   </div>
 </div>
 <script type="module">
@@ -249,7 +293,10 @@ const bgFill  = { dark: "#0d1117", light: "#f6f8fa", white: "#ffffff" };
 const themeMap = { dark: "dark", light: "default", white: "base" };
 const EMOJI_RE = new RegExp("${EMOJI_RE_SRC}", "gu");
 
-document.getElementById("bgsel").value = INIT_BG;
+document.getElementById("bg_label").textContent = INIT_BG.charAt(0).toUpperCase() + INIT_BG.slice(1);
+document.querySelectorAll("#bg_pop button[data-bg]").forEach(function(b){
+  b.classList.toggle("active", b.getAttribute("data-bg") === INIT_BG);
+});
 
 if (DIAGRAMS.length > 1) {
   DIAGRAMS.forEach((d, i) => {
@@ -378,6 +425,12 @@ window.addEventListener("wheel", function(e) {
 window.setBg = function(v) {
   currentBg = v;
   document.body.className = bgClass[v] || "bg-dark";
+  // sync the theme dropdown label + active item
+  document.getElementById("bg_label").textContent = (v.charAt(0).toUpperCase() + v.slice(1));
+  document.querySelectorAll("#bg_pop button[data-bg]").forEach(function(b){
+    b.classList.toggle("active", b.getAttribute("data-bg") === v);
+  });
+  closeAllPops();
   render(themeMap[v] || "dark");
 };
 
@@ -431,6 +484,66 @@ window.exportPng = function() {
   };
   img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(data);
 };
+
+// Shared dropdown helpers — both theme (.dd) and format (.dl-split) popups
+// use .dd-pop.open + a .dd-caret.spin that must be reset together.
+function closeAllPops(){
+  document.querySelectorAll(".dd-pop.open").forEach(function(p){ p.classList.remove("open"); });
+  document.querySelectorAll(".dd-caret.spin").forEach(function(c){ c.classList.remove("spin"); });
+}
+
+// Download split button: one-click download + format switcher.
+let dlFormat = "png";
+try { dlFormat = localStorage.getItem("mv:dlFormat") === "svg" ? "svg" : "png"; } catch {}
+function toggleDlMenu(){
+  const pop = document.getElementById("dlm");
+  const willOpen = !pop.classList.contains("open");
+  closeAllPops();
+  if (willOpen) { pop.classList.add("open"); document.getElementById("dlm_caret").classList.add("spin"); }
+}
+function applyFormat(){
+  const fmt = dlFormat.toUpperCase();
+  document.getElementById("dlm_fmt").textContent = fmt;
+  document.getElementById("dlm_main").title = "Download " + fmt;
+  document.querySelectorAll("#dlm button[data-fmt]").forEach(function(b){
+    b.classList.toggle("active", b.getAttribute("data-fmt") === dlFormat);
+  });
+}
+function doDownload(){
+  closeAllPops();
+  (dlFormat === "svg" ? window.exportSvg : window.exportPng)();
+}
+function setFormat(fmt){
+  dlFormat = fmt;
+  try { localStorage.setItem("mv:dlFormat", fmt); } catch {}
+  applyFormat();
+  closeAllPops();
+}
+// Event delegation on the format split button.
+document.getElementById("dl_split").addEventListener("click", function(e){
+  e.stopPropagation();
+  if (e.target.closest(".dl-main")) { doDownload(); return; }
+  if (e.target.closest(".dl-toggle")) { toggleDlMenu(); return; }
+  const item = e.target.closest("[data-fmt]");
+  if (item) { setFormat(item.getAttribute("data-fmt")); return; }
+});
+// Theme dropdown: open/close + pick.
+document.getElementById("bg_dd").addEventListener("click", function(e){
+  e.stopPropagation();
+  const item = e.target.closest("[data-bg]");
+  if (item) { window.setBg(item.getAttribute("data-bg")); return; }
+  if (e.target.closest(".dd-btn")) {
+    const pop = document.getElementById("bg_pop");
+    const willOpen = !pop.classList.contains("open");
+    closeAllPops();
+    if (willOpen) { pop.classList.add("open"); document.getElementById("bg_caret").classList.add("spin"); }
+  }
+});
+// Close any open popup when clicking outside both dropdowns.
+document.addEventListener("click", function(e) {
+  if (!e.target.closest(".dl-split") && !e.target.closest(".dd")) closeAllPops();
+});
+applyFormat();
 
 window.copyCode = function() {
   navigator.clipboard.writeText(DIAGRAMS[activeIdx].code).then(() => {

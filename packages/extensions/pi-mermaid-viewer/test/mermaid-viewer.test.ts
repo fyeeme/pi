@@ -308,6 +308,24 @@ describe("quoteBareLabels", () => {
 		expect(result.code).toBe(input);
 		expect(result.fixes).toEqual([]);
 	});
+
+	it("leaves the full real-world four-layer flowchart untouched", () => {
+		const input = [
+			"flowchart LR",
+			"    direction TB",
+			'    subgraph L1["Layer 1: RunDataEndListenerV2.processRunDataEnd()"]',
+			"        direction TB",
+			'        A5["dealRunEndActivity()"]',
+			"    end",
+			'    subgraph L3["Layer 3: ActivityResultManager.runEnd()"]',
+			'        C7["高光时刻(新/旧)"]',
+			"    end",
+			"    A5 --> B1",
+		].join("\n");
+		const result = quoteBareLabels(input);
+		expect(result.code).toBe(input);
+		expect(result.fixes).toEqual([]);
+	});
 });
 
 // ============================================================================
@@ -337,9 +355,13 @@ describe("renderHtml", () => {
 		expect(html).toContain('INIT_BG = "dark"');
 	});
 
-	it("sets bgsel to theme in script", () => {
+	it("initializes the custom theme dropdown label + active item", () => {
 		const html = renderHtml([], "light");
-		expect(html).toContain('getElementById("bgsel").value = INIT_BG');
+		expect(html).toContain('getElementById("bg_label")');
+		expect(html).toContain('data-bg="dark"');
+		expect(html).toContain('data-bg="light"');
+		expect(html).toContain('data-bg="white"');
+		expect(html).not.toContain('id="bgsel"');   // native select removed
 	});
 
 	it("handles empty diagrams array", () => {
@@ -364,10 +386,26 @@ describe("renderHtml", () => {
 		expect(html).toContain('id="cb"');
 		expect(html).toContain('id="sb"');
 
-		// Background selector
-		expect(html).toContain('value="dark"');
-		expect(html).toContain('value="light"');
-		expect(html).toContain('value="white"');
+		// Download split button: one-click download + format switcher (event delegation, no inline onclick)
+		expect(html).toContain('class="dl-main"');
+		expect(html).toContain('id="dl_split"');
+		expect(html).toContain('class="dl-toggle"');
+		expect(html).toContain('data-fmt="png"');
+		expect(html).toContain('data-fmt="svg"');
+		// No inline onclick on download buttons (uses addEventListener delegation)
+		expect(html).not.toContain('onclick="doDownload');
+		expect(html).not.toContain('onclick="setFormat');
+		expect(html).not.toContain('onclick="toggleDlMenu');
+		// Default format label shown on the main button
+		expect(html).toContain('id="dlm_fmt"');
+		// No standalone SVG/PNG buttons anymore
+		expect(html).not.toContain('>SVG</button>');
+		expect(html).not.toContain('>PNG</button>');
+
+		// Background selector (custom dropdown)
+		expect(html).toContain('data-bg="dark"');
+		expect(html).toContain('data-bg="light"');
+		expect(html).toContain('data-bg="white"');
 
 		// Zoom controls exist via onclick handlers
 		expect(html).toContain("zoom(-10)");
@@ -375,9 +413,9 @@ describe("renderHtml", () => {
 		expect(html).toContain("zoom(0)");
 
 		// Dark/Light/White theme selector
-		expect(html).toContain('value="dark"');
-		expect(html).toContain('value="light"');
-		expect(html).toContain('value="white"');
+		expect(html).toContain('data-bg="dark"');
+		expect(html).toContain('data-bg="light"');
+		expect(html).toContain('data-bg="white"');
 	});
 
 	it("does not create tabs when only one diagram", () => {
@@ -402,11 +440,12 @@ describe("renderHtml", () => {
 		expect(html).toContain('"label":"#2"');
 	});
 
-	it("does NOT embed a fixes field (try-first redesign: fixes are computed in-browser on retry)", () => {
+	it("does NOT embed a fixes field in the diagram JSON (try-first redesign: fixes are computed in-browser on retry)", () => {
 		const diagrams: DiagramData[] = [
 			{ code: "A --> B", label: "D" },
 		];
 		const html = renderHtml(diagrams, "dark");
+		// The DIAGRAMS JSON payload must not carry a per-diagram fixes field.
 		const payload = html.match(/const DIAGRAMS = (\[.*?\]);/s)?.[1] ?? "";
 		expect(payload).not.toMatch(/"fixes"/);
 		expect(payload).toContain('"code"');
@@ -588,16 +627,11 @@ describe("renderHtml — canvas layout structure", () => {
 		expect(html()).toMatch(/canvas-viewport\{[^}]*overflow:hidden/);
 	});
 
-	it("renders floating zoom bar with position:fixed", () => {
-		expect(html()).toMatch(/\.zoom-bar\{position:fixed/);
-	});
-
-	it("zoom bar is centered with translateX(-50%)", () => {
-		expect(html()).toContain("transform:translateX(-50%)");
-	});
-
-	it("floating bar has z-index above canvas", () => {
-		expect(html()).toMatch(/zoom-bar\{[^}]*z-index:10/);
+	it("zoom bar is grouped inside the toolbar (.grp), not fixed-centered", () => {
+		expect(html()).not.toMatch(/\.zoom-bar\{position:fixed/);
+		expect(html()).not.toContain("transform:translateX(-50%)");
+		// It lives inside .bar now, as a .grp sibling of the main button group.
+		expect(html()).toContain('class="grp" id="zb"');
 	});
 
 	it("canvas viewport has top padding for floating bars", () => {
@@ -608,9 +642,10 @@ describe("renderHtml — canvas layout structure", () => {
 		expect(html()).toMatch(/\.tabs\{position:fixed/);
 	});
 
-	it("zoom bar is positioned in body alongside tabs and toolbar", () => {
+	it("zoom bar is nested inside .bar (no longer a standalone fixed element)", () => {
 		const h = html();
-		expect(h).toContain('class="zoom-bar" id="zb"');
+		expect(h).not.toContain('class="zoom-bar" id="zb"');
+		expect(h).toContain('class="grp" id="zb"');
 	});
 
 	it("loading indicator exists with Loading diagram... text", () => {
@@ -787,11 +822,13 @@ describe("renderHtml — export strips emoji while display keeps them", () => {
 });
 
 // ============================================================================
-// quoteBareLabels.toString() injection invariant — guards the template-backslash gotcha
+// toString() injection invariant — guards the template-backslash gotcha
 // ============================================================================
-// quoteBareLabels is authored at module scope and injected via .toString().
-// Template literals EAT backslashes, so authoring regex-bearing JS inline would
-// corrupt the regexes (\w → w, \s → s). These tests lock the invariant.
+// quoteBareLabels is authored without type annotations and injected into the
+// rendered page via Function.prototype.toString(). Template literals EAT
+// backslashes, so authoring regex-bearing JS inline in renderHtml() would
+// corrupt the regexes (\w → w, \s → s). Authoring at module scope + .toString()
+// avoids that. These tests lock the invariant in place.
 
 describe("quoteBareLabels.toString() survives template-literal injection", () => {
 	it("preserves regex backslashes in the serialized source", () => {
@@ -803,6 +840,7 @@ describe("quoteBareLabels.toString() survives template-literal injection", () =>
 
 	it("serializes to a syntactically valid named function declaration", () => {
 		const src = quoteBareLabels.toString();
+		// node --check verifies it parses as a standalone script
 		const file = join(tmpdir(), `qlb-check-${Date.now()}.js`);
 		writeFileSync(file, src);
 		expect(() => execFileSync("node", ["--check", file])).not.toThrow();
@@ -851,13 +889,32 @@ describe("renderHtml: generated <script> is valid browser JS", () => {
 	it("contains no stale sanitize() call or d.fixes reference", () => {
 		const html = renderHtml([{ code: "flowchart TD\nA-->B", label: "t" }], "dark");
 		expect(html).not.toMatch(/\bsanitize\s*\(/);
+		// `healed.fixes` is legit; `d.fixes` (DiagramData.fixes) must be gone.
 		expect(html).not.toMatch(/(?<![a-zA-Z])d\.fixes\b/);
 	});
 
 	// --- EMOJI_RE template-backslash regression ---
+	// The regex used to be authored inline in the template literal, which ate
+	// its backslashes: /[\p{Emoji...}]/gu → /[p{Emoji...}]/gu. As a character
+	// class the broken regex matched the literal letters p/E/m/o/j/i/... and
+	// stripped ~45% of every exported SVG, so Image.onerror fired and PNG
+	// export silently never downloaded. SVG export survived only because it
+	// serves a blob directly without round-tripping through an <img>.
 	it("EMOJI_RE is built from an injected source string (backslashes survive)", () => {
 		const html = renderHtml([{ code: "flowchart TD\nA-->B", label: "t" }], "dark");
 		expect(html).toContain('new RegExp("[\\\\p{Emoji_Presentation}');
-		expect(html).not.toMatch(/EMOJI_RE = \/\[/);
+		expect(html).not.toMatch(/EMOJI_RE = \/\[/);   // no inlined literal regex
+	});
+
+	// --- dl-split overflow:hidden regression ---
+	// The format-picker menu (.dl-pop) is absolutely positioned below .dl-split.
+	// If .dl-split has overflow:hidden, the menu is clipped — it renders in the
+	// DOM (getBoundingClientRect exists) but is invisible AND unclickable
+	// (elementFromPoint hits the canvas behind it). Must stay overflow:visible.
+	it("dl-split never uses overflow:hidden (would clip the format menu)", () => {
+		const html = renderHtml([{ code: "flowchart TD\nA-->B", label: "t" }], "dark");
+		const m = html.match(/\.dl-split\{([^}]*)\}/);
+		expect(m, ".dl-split rule not found").toBeTruthy();
+		expect(m![1]).not.toMatch(/overflow:\s*hidden/);
 	});
 });
