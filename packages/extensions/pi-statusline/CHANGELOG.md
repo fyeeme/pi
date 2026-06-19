@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-19
+
+### Fixed
+
+- Tighten tokens-per-second spacing in the footer timing segment: render `39.5tok/s` instead of `39.5 tok/s`.
+
 ## [1.0.0] - 2025-05-31
 
 ### Added
