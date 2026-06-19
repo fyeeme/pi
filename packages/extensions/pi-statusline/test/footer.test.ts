@@ -301,7 +301,7 @@ describe("buildStatLine", () => {
 			emptyMcp,
 		);
 		expect(result).toContain("2m30s");
-		expect(result).toContain("39.5 tok/s");
+		expect(result).toContain("39.5tok/s");
 	});
 
 	it("shows MCP with connected servers", () => {

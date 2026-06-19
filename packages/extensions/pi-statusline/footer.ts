@@ -122,12 +122,12 @@ export function buildStatLine(
 		);
 	}
 
-	// timing: 2m30s 39.5 tok/s
+	// timing: 2m30s 39.5tok/s
 	{
 		const t: string[] = [];
 		const elapsed = getElapsedSec();
 		if (elapsed > 0) t.push(formatDuration(elapsed));
-		if (lastTps > 0) t.push(`${lastTps.toFixed(1)} tok/s`);
+		if (lastTps > 0) t.push(`${lastTps.toFixed(1)}tok/s`);
 		if (t.length) mods.push(t.join(" "));
 	}
 
