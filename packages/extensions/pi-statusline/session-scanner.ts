@@ -1,16 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { startOfCurrentWeekLocal } from "./week.ts";
 
 export function scanWeeklyTokens(providerName: string): number {
 	const sessionsDir = join(getAgentDir(), "sessions");
-	const now = new Date();
-	// Natural week: Monday 00:00 UTC
-	const dayOfWeek = now.getUTCDay();
-	const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-	const weekStart = new Date(
-		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - mondayOffset, 0, 0, 0, 0),
-	);
+	// Natural week: Monday 00:00 local time
+	const weekStartMs = startOfCurrentWeekLocal();
 
 	let total = 0;
 
@@ -29,7 +25,7 @@ export function scanWeeklyTokens(providerName: string): number {
 				if (!fname.endsWith(".jsonl")) continue;
 				try {
 					const fileDate = new Date(fname.slice(0, 10) + "T00:00:00Z");
-					if (fileDate < weekStart) continue;
+					if (fileDate.getTime() < weekStartMs) continue;
 				} catch {
 					continue;
 				}
