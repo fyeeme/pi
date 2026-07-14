@@ -34,7 +34,6 @@
   "files": [
     "*.ts",
     "providers/*.ts",
-    "quota/*.ts",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

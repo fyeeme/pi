@@ -177,7 +177,6 @@ function makeProvider(formatResult: string): UsageProvider {
 		fetchUsage: async () => null,
 		formatForFooter: () => formatResult,
 		debugDump: () => {},
-		quotaCalculator: {} as any,
 	};
 }
 
