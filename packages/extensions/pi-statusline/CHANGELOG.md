@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- ZAI weekly token count for plans without a `unit:6` weekly quota now comes from the backend `model-usage` API for the current natural week (Mon 00:00 UTC → now) instead of scanning local session files, so it matches the backend's per-week tally. Footer label changed from `7d:` to `W:` to reflect the natural-week window.
+
+### Changed
+
+- Natural-week window (DeepSeek local scan and ZAI fallback) now uses the host's local timezone instead of UTC, so "this week" matches the user's expectation. Both providers share the same boundary via `startOfCurrentWeekLocal`.
+
+### Removed
+
+- `quota/` directory (`QuotaCalculator` and its DeepSeek/ZAI implementations) and the `quotaCalculator` field on `UsageProvider`. These were never invoked at runtime; the live logic lives in the providers directly.
+
 ## [1.0.1] - 2026-06-19
 
 ### Fixed
