@@ -71,11 +71,12 @@ export function buildFirstPrompt(
 ): string {
 	const maxLength = opts.maxLength ?? 200;
 	return [
-		"You generate a short title for this conversation so the user can find it later in a session list.",
+		"You generate a descriptive title for this conversation so the user can find it later in a session list.",
 		"Rules:",
 		'- Output ONLY the title text. No quotes, no trailing punctuation, no explanation.',
 		"- Use the SAME language as the user's first message.",
-		`- Keep it under ${maxLength} characters. Be concise and descriptive.`,
+		'- Be descriptive, not terse: include the key entity (class, component, or concept), the action, and the goal — not a vague category.',
+		`- Aim for roughly 15-40 characters; never exceed ${maxLength} characters.`,
 		"",
 		"<conversation>",
 		conversationText,
@@ -93,11 +94,12 @@ export function buildAutoPrompt(
 		"You decide whether the session title still matches the conversation.",
 		`- Current title: ${currentName}`,
 		"If the title is still accurate, reply with exactly: KEEP",
-		"If it is inaccurate or too vague now, output a NEW short title.",
+		"If it is inaccurate or too vague now, output a NEW descriptive title.",
 		"Rules for a new title:",
 		'- ONLY the title text. No quotes, no trailing punctuation, no explanation.',
 		"- Use the SAME language as the user's first message.",
-		`- Under ${maxLength} characters.`,
+		'- Be descriptive, not terse: include the key entity (class, component, or concept), the action, and the goal — not a vague category.',
+		`- Aim for roughly 15-40 characters; never exceed ${maxLength} characters.`,
 		"",
 		"<conversation>",
 		conversationText,
@@ -236,5 +238,51 @@ export default function (pi: ExtensionAPI): void {
 		} finally {
 			inFlight = false;
 		}
+	});
+
+	pi.registerCommand("rename", {
+		description: "Rename this session. Pass a name, or leave empty to auto-generate one from the conversation.",
+		handler: async (args, ctx) => {
+			// /rename is a manual action: take control and stop background auto-naming
+			manuallyLocked = true;
+			const cfg = loadConfig(ctx.cwd);
+			const name = args.trim();
+
+			if (name) {
+				const cleaned = cleanTitle(name, cfg.maxLength);
+				if (!cleaned) {
+					ctx.ui.notify("Invalid name", "warning");
+					return;
+				}
+				lastAutoName = cleaned;
+				pi.setSessionName(cleaned);
+				ctx.ui.notify(`Renamed to: ${cleaned}`, "info");
+				return;
+			}
+
+			// no argument → generate a name from the conversation
+			const auth = await resolveModelAndAuth(ctx, cfg);
+			if (!auth) {
+				ctx.ui.notify("Cannot generate a name: model unavailable or no API key", "warning");
+				return;
+			}
+			const text = buildConversationText(ctx.sessionManager.getBranch());
+			if (!text.trim()) {
+				ctx.ui.notify("No conversation to generate a name from yet", "warning");
+				return;
+			}
+			try {
+				const title = cleanTitle(await generateTitle(buildFirstPrompt(text, cfg), auth), cfg.maxLength);
+				if (!title) {
+					ctx.ui.notify("Could not generate a name from the model response", "warning");
+					return;
+				}
+				lastAutoName = title;
+				pi.setSessionName(title);
+				ctx.ui.notify(`Renamed to: ${title}`, "info");
+			} catch {
+				ctx.ui.notify("Failed to generate a name", "error");
+			}
+		},
 	});
 }

@@ -21,8 +21,9 @@ Requires pi `>= 0.80.0` (uses the `agent_settled` / `session_info_changed` event
 ## Behavior
 
 - When the first agent run of a session **settles**, the extension asks the model
-  for a concise title (same language as your first message) and writes it via
-  `setSessionName`. It then shows up in the resume picker immediately.
+  for a descriptive title (same language as your first message) — key entity +
+  action + goal, not a terse label — and writes it via `setSessionName`. It then
+  shows up in the resume picker immediately.
 - **Never overwrites a name you set manually** (`/name`, `--name`, the picker's
   rename, or any other extension). Once it detects an external rename it locks
   itself for the rest of the session.
@@ -30,6 +31,11 @@ Requires pi `>= 0.80.0` (uses the `agent_settled` / `session_info_changed` event
   - `first` (default) — name once, then leave it alone.
   - `auto` — re-evaluate each turn; the model replies `KEEP` or a new title, so
     the name tracks the current topic.
+- **`/rename [name]`** — manually rename the current session on demand. With a
+  name argument it sets that name; with no argument it generates one from the
+  conversation (same descriptive prompt as auto-naming). Invoking `/rename` is a
+  manual action, so it locks out background auto-naming for the rest of the
+  session — you've taken control.
 
 ## Configuration
 
@@ -61,4 +67,6 @@ the session is still unnamed.
    fresh session, wait for the reply → the resume picker shows a generated title.
 2. `/name foo`, chat a few turns → name stays `foo` (locked).
 3. `mode: "auto"`: shift topic across turns → name updates; same topic → stays.
-4. Unset the model's API key → no errors, session runs normally.
+4. `/rename foo` → name becomes `foo` and stays (locked). `/rename` with no
+   argument → generates a fresh name from the conversation.
+5. Unset the model's API key → no errors, session runs normally.

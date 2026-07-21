@@ -144,6 +144,22 @@ describe("prompts", () => {
 		const p = buildAutoPrompt("line1\nline2", conv, {});
 		expect(p).toContain("Current title: line1\nline2");
 	});
+
+	it("buildFirstPrompt favors descriptive over terse titles", () => {
+		const p = buildFirstPrompt(conv, { maxLength: 200 });
+		expect(p).toContain("descriptive");
+		expect(p).toContain("15-40 characters");
+		expect(p).not.toMatch(/\bshort\b/);
+		expect(p).not.toContain("concise");
+	});
+
+	it("buildAutoPrompt favors descriptive over terse titles", () => {
+		const p = buildAutoPrompt("Old", conv, { maxLength: 200 });
+		expect(p).toContain("descriptive");
+		expect(p).toContain("15-40 characters");
+		expect(p).not.toMatch(/\bshort\b/);
+		expect(p).not.toContain("concise");
+	});
 });
 
 describe("loadConfig", () => {
@@ -273,12 +289,14 @@ const mkPi = (initialName?: string) => {
 	let name = initialName;
 	const setCalls: string[] = [];
 	const handlers: Handlers = {};
+	const commands: Record<string, { description?: string; handler: (args: string, ctx: any) => Promise<void> }> = {};
 	const pi = {
 		on: (event: string, h: (e: unknown, ctx: unknown) => Promise<void> | void) => { handlers[event] = h; },
+		registerCommand: (n: string, opts: any) => { commands[n] = opts; },
 		getSessionName: () => name,
 		setSessionName: (n: string) => { name = n; setCalls.push(n); },
 	} as any;
-	return { pi, handlers, setCalls, getName: () => name, renameExternally: (n: string) => { name = n; } };
+	return { pi, handlers, setCalls, commands, getName: () => name, renameExternally: (n: string) => { name = n; } };
 };
 
 const mkCtxOrch = (branch: Array<{ type: string; message: { role: string; content: string } }>) => ({
@@ -286,6 +304,7 @@ const mkCtxOrch = (branch: Array<{ type: string; message: { role: string; conten
 	model: { id: "m" },
 	sessionManager: { getBranch: () => branch },
 	modelRegistry: { getApiKeyAndHeaders: () => ({ ok: true, apiKey: "k", headers: undefined }) },
+	ui: { notify: vi.fn() },
 }) as any;
 
 const branch = (texts: string[]) =>
@@ -380,5 +399,62 @@ describe("extension orchestration", () => {
 		await handlers.agent_settled?.({ type: "agent_settled" }, ctx);
 		expect(setCalls).toEqual(["Topic A", "Topic B"]);
 		vi.unstubAllEnvs();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// /rename command
+// ---------------------------------------------------------------------------
+
+describe("rename command", () => {
+	beforeEach(() => { vi.clearAllMocks(); });
+
+	it("/rename <name> sets the cleaned name and locks the background auto-namer", async () => {
+		const { pi, handlers, setCalls, commands } = mkPi();
+		setup(pi);
+		handlers.session_start?.({ type: "session_start", reason: "new" }, mkCtxOrch([]));
+		const ctx = mkCtxOrch(branch(["q", "a"]));
+		await commands.rename.handler("  My Cool Session.  ", ctx);
+		expect(setCalls).toEqual(["My Cool Session"]);
+		// manuallyLocked → background agent_settled must not overwrite
+		await handlers.agent_settled?.({ type: "agent_settled" }, ctx);
+		expect(setCalls).toEqual(["My Cool Session"]);
+	});
+
+	it("/rename with empty arg auto-generates from the conversation", async () => {
+		const { pi, handlers, setCalls, commands } = mkPi();
+		setup(pi);
+		handlers.session_start?.({ type: "session_start", reason: "new" }, mkCtxOrch([]));
+		await commands.rename.handler("", mkCtxOrch(branch(["help me debug", "ok"])));
+		// default mocked complete returns "Auto Title"
+		expect(setCalls).toEqual(["Auto Title"]);
+	});
+
+	it("/rename with empty arg and no conversation notifies and does not rename", async () => {
+		const { pi, setCalls, commands } = mkPi();
+		setup(pi);
+		const ctx = mkCtxOrch([]);
+		await commands.rename.handler("", ctx);
+		expect(setCalls).toEqual([]);
+		expect(ctx.ui.notify).toHaveBeenCalledWith("No conversation to generate a name from yet", "warning");
+	});
+
+	it("/rename with empty arg notifies on auth failure", async () => {
+		const { pi, setCalls, commands } = mkPi();
+		setup(pi);
+		const ctx = mkCtxOrch(branch(["q", "a"]));
+		ctx.modelRegistry.getApiKeyAndHeaders = () => ({ ok: false, error: "no key" });
+		await commands.rename.handler("", ctx);
+		expect(setCalls).toEqual([]);
+		expect(ctx.ui.notify).toHaveBeenCalledWith("Cannot generate a name: model unavailable or no API key", "warning");
+	});
+
+	it("/rename with invalid (punctuation-only) name notifies and does not rename", async () => {
+		const { pi, setCalls, commands } = mkPi();
+		setup(pi);
+		const ctx = mkCtxOrch(branch(["q", "a"]));
+		await commands.rename.handler("...", ctx);
+		expect(setCalls).toEqual([]);
+		expect(ctx.ui.notify).toHaveBeenCalledWith("Invalid name", "warning");
 	});
 });
