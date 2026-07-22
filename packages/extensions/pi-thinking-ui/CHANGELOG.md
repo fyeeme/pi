@@ -4,7 +4,8 @@
 - Default thinking view mode is now `collapsed` instead of `summary`
 - Step-core cache: completed step summaries are memoized by step text, avoiding re-summarization of unchanged steps during streaming (linearizes per-derive summarization cost)
 
-### Added
+### Fixed
+- Respect the host `hideThinkingBlock` setting: when thinking is hidden, the extension falls back to Pi's native hidden-label renderer instead of forcing the custom thinking UI
 - Three-mode thinking visualization: `collapsed`, `summary`, `expanded`
 - Deterministic step derivation from raw thinking text
 - Semantic role inference with icons and colors
