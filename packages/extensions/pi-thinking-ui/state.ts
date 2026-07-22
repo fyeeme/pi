@@ -215,7 +215,7 @@ export function setCurrentThinkingScopeKey(scopeKey: string): void {
 export function getThinkingUIMode(scopeKey?: string): ThinkingUIMode {
 	const normalizedScopeKey = normalizeThinkingScopeKey(scopeKey ?? globalState.currentScopeKey);
 	ensureScopeState(normalizedScopeKey);
-	return globalState.modeByScopeKey[normalizedScopeKey] ?? "summary";
+	return globalState.modeByScopeKey[normalizedScopeKey] ?? "collapsed";
 }
 
 export function setThinkingUIMode(mode: ThinkingUIMode, scopeKey?: string): void {

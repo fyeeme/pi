@@ -381,7 +381,7 @@ function cachingCoreResolver(stepText: string): DerivedStepCore {
 		return cached;
 	}
 	const core = deriveStepCore(stepText);
-	if (stepCoreCache.size >= STEP_CORE_CACHE_LIMIT && !stepCoreCache.has(stepText)) {
+	if (stepCoreCache.size >= STEP_CORE_CACHE_LIMIT) {
 		const oldestKey = stepCoreCache.keys().next().value;
 		if (oldestKey !== undefined) {
 			stepCoreCache.delete(oldestKey);
