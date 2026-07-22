@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Changed
+- Default thinking view mode is now `collapsed` instead of `summary`
+- Step-core cache: completed step summaries are memoized by step text, avoiding re-summarization of unchanged steps during streaming (linearizes per-derive summarization cost)
+
 ### Added
 - Three-mode thinking visualization: `collapsed`, `summary`, `expanded`
 - Deterministic step derivation from raw thinking text
