@@ -391,10 +391,6 @@ function cachingCoreResolver(stepText: string): DerivedStepCore {
 	return core;
 }
 
-function blocksLengthFingerprint(blocks: ThinkingSourceBlock[]): number[] {
-	return blocks.map((block) => block.text.length);
-}
-
 function totalLengthDelta(current: number[], previous: number[]): number {
 	let delta = 0;
 	for (let index = 0; index < Math.max(current.length, previous.length); index += 1) {
@@ -409,7 +405,7 @@ function deriveOrReuseSteps(
 	blocks: ThinkingSourceBlock[],
 ): DerivedThinkingStep[] {
 	const active = getActiveThinkingState(messageTimestamp, scopeKey);
-	const lengths = blocksLengthFingerprint(blocks);
+	const lengths = blocks.map((block) => block.text.length);
 	const cached = throttleCache.get(messageTimestamp);
 
 	// During active streaming, skip re-derivation when only a few chars were appended.

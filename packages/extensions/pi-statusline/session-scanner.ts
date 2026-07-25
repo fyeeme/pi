@@ -3,10 +3,23 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { startOfCurrentWeekLocal } from "./week.ts";
 
+const SCAN_CACHE_TTL_MS = 60_000; // 1 minute
+let scanCache: { providerName: string; sessionsDir: string; weekStartMs: number; total: number; fetchedAt: number } | null = null;
+
 export function scanWeeklyTokens(providerName: string): number {
 	const sessionsDir = join(getAgentDir(), "sessions");
-	// Natural week: Monday 00:00 local time
 	const weekStartMs = startOfCurrentWeekLocal();
+
+	// Return cached result if still valid for the same week window and sessions dir
+	if (
+		scanCache &&
+		scanCache.providerName === providerName &&
+		scanCache.sessionsDir === sessionsDir &&
+		scanCache.weekStartMs === weekStartMs &&
+		Date.now() - scanCache.fetchedAt < SCAN_CACHE_TTL_MS
+	) {
+		return scanCache.total;
+	}
 
 	let total = 0;
 
@@ -24,7 +37,7 @@ export function scanWeeklyTokens(providerName: string): number {
 			for (const fname of files) {
 				if (!fname.endsWith(".jsonl")) continue;
 				try {
-					const fileDate = new Date(fname.slice(0, 10) + "T00:00:00Z");
+					const fileDate = new Date(fname.slice(0, 10) + "T00:00:00");
 					if (fileDate.getTime() < weekStartMs) continue;
 				} catch {
 					continue;
@@ -56,5 +69,6 @@ export function scanWeeklyTokens(providerName: string): number {
 		// sessions dir doesn't exist or is unreadable
 	}
 
+	scanCache = { providerName, sessionsDir, weekStartMs, total, fetchedAt: Date.now() };
 	return total;
 }
