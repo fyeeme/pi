@@ -24,6 +24,8 @@ import peonPingExtension, {
 	setTabTitle,
 	getSessionId,
 	firePeon,
+	findPeonCli,
+	execPeonCli,
 	PEON_SH_TEMPLATES,
 } from "../index.ts";
 
@@ -351,7 +353,7 @@ describe("peonPingExtension", () => {
 	it("logs a warning and returns early when peon.sh is not found", () => {
 		vi.mocked(existsSync).mockReturnValue(false);
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		const pi = { on: vi.fn() } as unknown as ExtensionAPI;
+		const pi = { on: vi.fn(), registerCommand: vi.fn() } as unknown as ExtensionAPI;
 
 		peonPingExtension(pi);
 
@@ -372,7 +374,7 @@ describe("peonPingExtension", () => {
 
 		beforeEach(() => {
 			vi.mocked(existsSync).mockReturnValue(true);
-			pi = { on: vi.fn() };
+			pi = { on: vi.fn(), registerCommand: vi.fn() };
 			writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 			mockProc = {
 				stdin: { write: vi.fn(), end: vi.fn() },
@@ -387,8 +389,9 @@ describe("peonPingExtension", () => {
 			writeSpy.mockRestore();
 		});
 
-		it("registers all 5 event handlers", () => {
+		it("registers all 5 event handlers and 2 commands", () => {
 			expect(pi.on).toHaveBeenCalledTimes(5);
+			expect(pi.registerCommand).toHaveBeenCalledTimes(2);
 		});
 
 		it("registers session_start handler", () => {
@@ -529,3 +532,84 @@ describe("peonPingExtension", () => {
 		});
 	});
 });
+
+// ============================================================================
+// findPeonCli
+// ============================================================================
+
+describe("findPeonCli", () => {
+	beforeEach(() => {
+		vi.mocked(existsSync).mockReset();
+		vi.mocked(execFileSync).mockReset();
+		delete process.env.PEON_SH;
+	});
+
+	it("returns peonPath when peon.sh is found", () => {
+		vi.mocked(existsSync).mockReturnValue(true);
+		const cli = findPeonCli();
+		expect(cli).toBeTruthy();
+	});
+
+	it("returns null when peon.sh is not found", () => {
+		vi.mocked(existsSync).mockReturnValue(false);
+		expect(findPeonCli()).toBeNull();
+	});
+});
+
+// ============================================================================
+// execPeonCli
+// ============================================================================
+
+describe("execPeonCli", () => {
+	let closeHandler: ((code: number | null) => void) | undefined;
+	let errorHandler: (() => void) | undefined;
+
+	beforeEach(() => {
+		vi.mocked(spawn).mockReset();
+		closeHandler = undefined;
+		errorHandler = undefined;
+	});
+
+	function makeMockProc(stdoutText: string) {
+		return {
+			stdout: {
+				on: vi.fn((_event: string, cb: Function) => {
+					setTimeout(() => cb(Buffer.from(stdoutText)), 0);
+				}),
+			},
+			stderr: { on: vi.fn() },
+			on: vi.fn((_event: string, cb: Function) => {
+				if (_event === "close") closeHandler = cb as typeof closeHandler;
+				if (_event === "error") errorHandler = cb as typeof errorHandler;
+			}),
+		};
+	}
+
+	it("spawns the CLI with the given args", async () => {
+		const mockProc = makeMockProc("ok");
+		vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>);
+
+		const promise = execPeonCli("/path/to/peon.sh", ["toggle"]);
+		setTimeout(() => closeHandler?.(0), 1);
+		const result = await promise;
+
+		expect(spawn).toHaveBeenCalledWith("bash", ["/path/to/peon.sh", "toggle"], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		expect(result.stdout).toBe("ok");
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("resolves on error event", async () => {
+		const mockProc = makeMockProc("");
+		vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>);
+
+		const promise = execPeonCli("/path/to/peon.sh", ["toggle"]);
+		setTimeout(() => errorHandler?.(), 1);
+		const result = await promise;
+
+		expect(result.stdout).toBe("");
+		expect(result.exitCode).toBe(-1);
+	});
+});
+

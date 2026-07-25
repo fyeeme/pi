@@ -186,6 +186,40 @@ export function firePeon(
 }
 
 // ============================================================================
+// peon CLI invocation (for commands)
+// ============================================================================
+
+export function findPeonCli(): string | null {
+	const peonPath = findPeonSh();
+	if (!peonPath) return null;
+	// peon.sh accepts CLI args too — just use it directly
+	return peonPath;
+}
+
+export async function execPeonCli(
+	cliPath: string,
+	args: string[],
+	ctx?: ExtensionContext,
+): Promise<{ stdout: string; exitCode: number | null }> {
+	return new Promise((resolve) => {
+		const { shell, script } = resolveShellAndScript(cliPath);
+		const proc = spawn(shell, [script, ...args], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+
+		let stdout = "";
+		let stderr = "";
+		proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+		proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+		proc.on("close", (code) => {
+			resolve({ stdout: stdout.trim(), exitCode: code });
+		});
+		proc.on("error", () => resolve({ stdout: "", exitCode: -1 }));
+	});
+}
+
+// ============================================================================
 // Extension
 // ============================================================================
 
@@ -199,8 +233,13 @@ export default function peonPingExtension(pi: ExtensionAPI): void {
 		return;
 	}
 
+	const cliPath = findPeonCli();
 	const cwd = process.cwd();
 	const projectName = basename(cwd) || "pi";
+
+	// -----------------------------------------------------------------------
+	// Lifecycle event forwarding
+	// -----------------------------------------------------------------------
 
 	pi.on("session_start", async (_event, ctx) => {
 		const sessionId = getSessionId(ctx);
@@ -230,5 +269,32 @@ export default function peonPingExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		const sessionId = getSessionId(ctx);
 		firePeon(peonPath, "SessionEnd", cwd, sessionId);
+	});
+
+	// -----------------------------------------------------------------------
+	// Commands
+	// -----------------------------------------------------------------------
+
+	if (!cliPath) return;
+
+	pi.registerCommand("peon-ping-toggle", {
+		description: "Toggle peon-ping mute on/off",
+		handler: async (_args, ctx) => {
+			const result = await execPeonCli(cliPath, ["toggle"], ctx);
+			ctx.ui.notify(result.stdout || "toggled", "info");
+		},
+	});
+
+	pi.registerCommand("peon-ping-use", {
+		description: "Switch sound pack: /peon-ping-use <name>",
+		handler: async (args, ctx) => {
+			const name = args.trim();
+			if (!name) {
+				ctx.ui.notify("Usage: /peon-ping-use <pack-name>", "warning");
+				return;
+			}
+			const result = await execPeonCli(cliPath, ["packs", "use", "--install", name], ctx);
+			ctx.ui.notify(result.stdout || `Switched to ${name}`, "info");
+		},
 	});
 }
