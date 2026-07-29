@@ -1,0 +1,3 @@
+[submodule "packages/extensions"]
+	path = packages/extensions
+	url = git@github.com:fyeeme/pi-packages.git
