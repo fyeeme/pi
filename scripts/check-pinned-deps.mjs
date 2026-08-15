@@ -21,8 +21,12 @@ function collectPackageJsonFiles(directory) {
 	}
 }
 
+// @earendil-works/pi-* are this repo's workspace packages. @fyeeme/pi-* are the
+// packages/extensions submodule's sibling packages, which the submodule manages
+// with ^ ranges on npm registry versions (its own release checklist in rule.md);
+// the parent repo has no other @fyeeme/ dependencies.
 function isInternalWorkspaceDependency(name) {
-	return name.startsWith("@earendil-works/pi-");
+	return name.startsWith("@earendil-works/pi-") || name.startsWith("@fyeeme/pi-");
 }
 
 function isNonRegistrySpecifier(specifier) {
